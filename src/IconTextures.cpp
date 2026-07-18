@@ -74,11 +74,12 @@ void IconTextures::LoadRadarAtlas() {
     // Grid cells of the per-rarity monster icons — the radar's icons.json
     // positions, with the KillCount plugin's hardcoded values as fallback.
     struct Slot { const char* name; int gx, gy; };
-    Slot slots[4] = {
+    Slot slots[5] = {
         { "Normal Monster", 0, 14 },
         { "Magic Monster",  6,  3 },
         { "Rare Monster",   4, 57 },
         { "Unique Monster", 6, 57 },
+        { "RogueExile",     0, 61 },   // dedicated Rogue Exile icon (radar IconRegistry)
     };
     std::ifstream f(base / L"icons.json");
     if (f.is_open()) {
@@ -102,12 +103,16 @@ void IconTextures::LoadRadarAtlas() {
     constexpr float kCell = 64.0f;   // radar atlas grid size
     const float cu = kCell / (float)m_atlas.w;
     const float cv = kCell / (float)m_atlas.h;
-    for (int i = 0; i < 4; i++) {
-        m_monster[i].tex   = m_atlas.srv;
-        m_monster[i].uv0   = ImVec2(slots[i].gx * cu, slots[i].gy * cv);
-        m_monster[i].uv1   = ImVec2((slots[i].gx + 1) * cu, (slots[i].gy + 1) * cv);
-        m_monster[i].valid = true;
-    }
+    auto makeIcon = [&](const Slot& s) -> AtlasIcon {
+        AtlasIcon a;
+        a.tex   = m_atlas.srv;
+        a.uv0   = ImVec2(s.gx * cu, s.gy * cv);
+        a.uv1   = ImVec2((s.gx + 1) * cu, (s.gy + 1) * cv);
+        a.valid = true;
+        return a;
+    };
+    for (int i = 0; i < 4; i++) m_monster[i] = makeIcon(slots[i]);
+    m_rogue = makeIcon(slots[4]);
 }
 
 const AtlasIcon& IconTextures::Monster(int rarity) const {
@@ -133,6 +138,7 @@ void IconTextures::Release() {
     rel(m_ex); rel(m_div); rel(m_chaos);
     rel(m_atlas);
     for (auto& m : m_monster) m = AtlasIcon{};
+    m_rogue = AtlasIcon{};
     for (auto& kv : m_items) rel(kv.second);
     m_items.clear();
 }

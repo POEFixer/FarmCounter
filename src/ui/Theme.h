@@ -19,6 +19,7 @@ inline const ImVec4 kDim    = ImVec4(0.70f, 0.70f, 0.70f, 1.0f);  // secondary /
 inline const ImVec4 kHive   = ImVec4(0.78f, 0.45f, 0.95f, 1.0f);  // Hiveblood accent
 inline const ImVec4 kIncur  = ImVec4(0.90f, 0.60f, 0.10f, 1.0f);  // Incursion accent
 inline const ImVec4 kGold   = ImVec4(0.98f, 0.80f, 0.25f, 1.0f);  // Gold counter accent
+inline const ImVec4 kMod    = ImVec4(0.53f, 0.68f, 1.00f, 1.0f);  // map-modifier line (in-game blue)
 
 } // namespace FcTheme
 

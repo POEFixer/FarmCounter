@@ -22,6 +22,8 @@ public:
     // Radar monster icon by rarity (0=Normal 1=Magic 2=Rare 3=Unique); .valid
     // false when the atlas is missing — callers fall back to colored dots.
     const AtlasIcon& Monster(int rarity) const;
+    // Radar Rogue Exile icon (atlas grid [0,61]); .valid false if atlas missing.
+    const AtlasIcon& RogueExile() const { return m_rogue; }
     IconTex Item(const std::string& localPngPath);  // path -> SRV (cached; "" path => invalid)
     void Release();
 
@@ -33,6 +35,7 @@ private:
     IconTex m_ex, m_div, m_chaos;       // currency
     IconTex m_atlas;                    // radar sprite sheet (owns the SRV)
     AtlasIcon m_monster[4];             // per-rarity sub-rects of m_atlas
+    AtlasIcon m_rogue;                  // Rogue Exile sub-rect (grid [0,61])
     AtlasIcon m_atlasEmpty;
     IconTex m_empty;                    // returned when nothing valid
     std::unordered_map<std::string, IconTex> m_items;  // localPath -> tex (caches misses too)

@@ -115,6 +115,18 @@ void DrawKillCountInline(const IconTextures* icons, const KillCounter& kc, const
         KcDrawRarityMark(icons, 3, ImVec4(1.f, 0.5f, 0.1f, 1.f));
         ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", kc.Unique()); ImGui::SameLine(0.f, 8.f);
     }
+    if (s.kcShowRogue && kc.Rogue() > 0) {                  // Rogue Exiles — own icon
+        if (icons) {
+            const AtlasIcon& ri = icons->RogueExile();
+            if (ri.valid) {
+                const float lh = ImGui::GetTextLineHeight();
+                ImGui::Image(ri.tex, ImVec2(lh, lh), ri.uv0, ri.uv1);
+            } else {
+                KcDrawRarityDot(ImVec4(0.85f, 0.35f, 0.15f, 1.f));
+            }
+        }
+        ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", kc.Rogue()); ImGui::SameLine(0.f, 8.f);
+    }
     ImGui::Text("(%d)", total);
 }
 

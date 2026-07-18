@@ -1335,6 +1335,25 @@ public:
     bool GetHiveblood(int32_t& out) const {
         return m_host && m_host->get_hiveblood && m_host->get_hiveblood(&out) != 0;
     }
+
+    // One rendered area/map modifier line.
+    struct AreaMod { uint32_t statRowIndex = 0; int32_t value = 0; std::string text; };
+
+    // Area/map modifiers — the rendered area-info panel lines ("27% increased
+    // Rarity of Items found in this Area"), in panel order. Empty outside a map
+    // or on a host that predates the tail function. Routed via the HostAbi
+    // top-level pointer (append-only tail; not a GameServiceAbi member).
+    std::vector<AreaMod> GetAreaMods() const {
+        std::vector<AreaMod> out;
+        if (!m_host || !m_host->enumerate_area_mods) return out;
+        m_host->enumerate_area_mods(
+            [](uint32_t rid, int32_t val, const char* text, void* ud) -> int32_t {
+                auto* v = static_cast<std::vector<AreaMod>*>(ud);
+                v->push_back({ rid, val, text ? std::string(text) : std::string() });
+                return 1;
+            }, &out);
+        return out;
+    }
 };
 
 // Enumerate / look up entities; Watch() keeps a component map fresh across

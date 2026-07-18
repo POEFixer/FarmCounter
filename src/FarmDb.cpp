@@ -100,8 +100,10 @@ void FarmDb::CreateTables() {
           kills_magic INTEGER NOT NULL DEFAULT 0,
           kills_rare INTEGER NOT NULL DEFAULT 0,
           kills_unique INTEGER NOT NULL DEFAULT 0,
+          kills_rogue INTEGER NOT NULL DEFAULT 0,
           session_id INTEGER NOT NULL DEFAULT 0,
-          archived INTEGER NOT NULL DEFAULT 0);
+          archived INTEGER NOT NULL DEFAULT 0,
+          map_mods TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS loot (
           run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
           name TEXT NOT NULL,
@@ -116,9 +118,32 @@ void FarmDb::CreateTables() {
         CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(archived, session_id);
         CREATE INDEX IF NOT EXISTS idx_loot_run ON loot(run_id);
     )");
-    // Column added after the first shipped schema (v53): a no-op error on fresh
-    // DBs (duplicate column), upgrades pre-gold DBs in place (Exec swallows it).
-    Exec("ALTER TABLE runs ADD COLUMN gold_gain INTEGER NOT NULL DEFAULT 0;");
+    // Columns added after earlier shipped schemas: a duplicate-column error on
+    // fresh DBs is harmless (Exec swallows it), an existing DB upgrades in place.
+    Exec("ALTER TABLE runs ADD COLUMN gold_gain INTEGER NOT NULL DEFAULT 0;");    // v54
+    Exec("ALTER TABLE runs ADD COLUMN map_mods TEXT NOT NULL DEFAULT '';");       // v55
+    Exec("ALTER TABLE runs ADD COLUMN kills_rogue INTEGER NOT NULL DEFAULT 0;");  // v56
+}
+
+// Join / split the map-mod lines for the single map_mods TEXT column ('\n' sep;
+// the rendered lines never contain a bare newline of their own — combined lines
+// are stored as separate entries by the core renderer).
+static std::string JoinMods(const std::vector<std::string>& mods) {
+    std::string s;
+    for (size_t i = 0; i < mods.size(); ++i) { if (i) s += '\n'; s += mods[i]; }
+    return s;
+}
+static std::vector<std::string> SplitMods(const std::string& s) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= s.size()) {
+        size_t nl = s.find('\n', start);
+        std::string part = s.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+        if (!part.empty()) out.push_back(std::move(part));
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+    return out;
 }
 
 void FarmDb::LoadAll(std::vector<MapRun>& runs, int& sessionActiveSec, int& sessionIdMax) {
@@ -127,7 +152,7 @@ void FarmDb::LoadAll(std::vector<MapRun>& runs, int& sessionActiveSec, int& sess
 
     Stmt s(m_db, "SELECT id, map_name, started_at, started_text, duration_sec, total_chaos, "
                  "exalted_rate, hiveblood_gain, beacon_gain, kills_normal, kills_magic, "
-                 "kills_rare, kills_unique, session_id, archived, gold_gain "
+                 "kills_rare, kills_unique, session_id, archived, gold_gain, map_mods, kills_rogue "
                  "FROM runs ORDER BY started_at, id;");
     while (s.Step()) {
         MapRun r;
@@ -147,6 +172,8 @@ void FarmDb::LoadAll(std::vector<MapRun>& runs, int& sessionActiveSec, int& sess
         r.sessionId     = s.Int(13);
         r.archived      = s.Int(14) != 0;
         r.goldGain      = s.Int(15);
+        r.mapMods       = SplitMods(s.Text(16));
+        r.killsRogue    = s.Int(17);
         runs.push_back(std::move(r));
     }
     // Attach loot per run (run counts are small; a query per run is fine here).
@@ -188,8 +215,8 @@ void FarmDb::InsertRun(MapRun& run) {
     if (run.startedText.empty()) run.startedText = FormatLocalTime(run.startedAt);
     Stmt s(m_db, "INSERT INTO runs (map_name, started_at, started_text, duration_sec, "
                  "total_chaos, exalted_rate, hiveblood_gain, beacon_gain, kills_normal, "
-                 "kills_magic, kills_rare, kills_unique, session_id, archived, gold_gain) "
-                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15);");
+                 "kills_magic, kills_rare, kills_unique, session_id, archived, gold_gain, map_mods, kills_rogue) "
+                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17);");
     s.BindText(1, run.mapName);
     s.BindI64 (2, run.startedAt);
     s.BindText(3, run.startedText);
@@ -205,6 +232,8 @@ void FarmDb::InsertRun(MapRun& run) {
     s.BindInt(13, run.sessionId);
     s.BindInt(14, run.archived ? 1 : 0);
     s.BindInt(15, run.goldGain);
+    s.BindText(16, JoinMods(run.mapMods));
+    s.BindInt(17, run.killsRogue);
     s.Run();
     run.dbId = sqlite3_last_insert_rowid(m_db);
 }
@@ -229,8 +258,8 @@ void FarmDb::UpdateRun(const MapRun& run) {
     Exec("BEGIN;");
     Stmt s(m_db, "UPDATE runs SET map_name=?2, duration_sec=?3, total_chaos=?4, exalted_rate=?5, "
                  "hiveblood_gain=?6, beacon_gain=?7, kills_normal=?8, kills_magic=?9, "
-                 "kills_rare=?10, kills_unique=?11, session_id=?12, archived=?13, gold_gain=?14 "
-                 "WHERE id=?1;");
+                 "kills_rare=?10, kills_unique=?11, session_id=?12, archived=?13, gold_gain=?14, "
+                 "map_mods=?15, kills_rogue=?16 WHERE id=?1;");
     s.BindI64 (1, run.dbId);
     s.BindText(2, run.mapName);
     s.BindInt (3, run.durationSec);
@@ -245,6 +274,8 @@ void FarmDb::UpdateRun(const MapRun& run) {
     s.BindInt(12, run.sessionId);
     s.BindInt(13, run.archived ? 1 : 0);
     s.BindInt(14, run.goldGain);
+    s.BindText(15, JoinMods(run.mapMods));
+    s.BindInt(16, run.killsRogue);
     s.Run();
     ReplaceLoot(run.dbId, run.loot);
     Exec("COMMIT;");

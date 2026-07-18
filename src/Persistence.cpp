@@ -133,6 +133,7 @@ void SaveSettings(const fs::path& dir, const OverlaySettings& s) {
     j["kcShowMagic"]       = s.kcShowMagic;
     j["kcShowRare"]        = s.kcShowRare;
     j["kcShowUnique"]      = s.kcShowUnique;
+    j["kcShowRogue"]       = s.kcShowRogue;
     j["hbWarnNearCap"]     = s.hbWarnNearCap;
     j["hbWarnThreshold"]   = s.hbWarnThreshold;
     j["hbShowMapGains"]    = s.hbShowMapGains;
@@ -172,6 +173,7 @@ void LoadSettings(const fs::path& dir, OverlaySettings& out) {
         out.kcShowMagic       = GetB(j, "kcShowMagic",       out.kcShowMagic);
         out.kcShowRare        = GetB(j, "kcShowRare",        out.kcShowRare);
         out.kcShowUnique      = GetB(j, "kcShowUnique",      out.kcShowUnique);
+        out.kcShowRogue       = GetB(j, "kcShowRogue",       out.kcShowRogue);
         out.hbWarnNearCap     = GetB(j, "hbWarnNearCap",     out.hbWarnNearCap);
         out.hbWarnThreshold   = std::clamp(GetI(j, "hbWarnThreshold", out.hbWarnThreshold), 50000, 100000);
         out.hbShowMapGains    = GetB(j, "hbShowMapGains",    out.hbShowMapGains);

@@ -677,6 +677,11 @@ typedef int32_t (*PsdkEntityVisitorFn)(const EntityInfoAbi* e,
 typedef int32_t (*PsdkInventoryVisitorFn)(const InventoryAbi* inv, void* userdata);
 typedef int32_t (*PsdkInventoryItemVisitorFn)(const InventoryItemAbi* item, void* userdata);
 typedef int32_t (*PsdkModVisitorFn)(const ModAbi* mod, PsdkModKind mod_kind, void* userdata);
+
+// One rendered area/map modifier line (HostAbi::enumerate_area_mods). `text` is
+// a host-owned UTF-8 string valid only during the callback — copy it to keep it.
+typedef int32_t (*PsdkAreaModVisitorFn)(uint32_t stat_row_index, int32_t value,
+                                        const char* text, void* userdata);
 typedef int32_t (*PsdkBuffVisitorFn)(const BuffAbi* buff, void* userdata);
 typedef int32_t (*PsdkActiveSkillVisitorFn)(const ActiveSkillAbi* s, void* userdata);
 typedef int32_t (*PsdkStatVisitorFn)(int32_t key, int32_t value, PsdkStatSource source_kind, void* userdata);
@@ -1263,6 +1268,15 @@ typedef struct HostAbi {
     // actor's skills, including minions. Append-only tail (2026-07-09).
     void (*enumerate_skill_stats)(uintptr_t skill_details_addr,
                                   PsdkSkillStatVisitorFn cb, void* userdata);
+
+    // Area/map modifiers — the rendered area-info panel lines (map mods). Host
+    // reads the AreaInstance stat containers (A@+0x138 final values ∩ B@+0x158
+    // membership) and renders each via the generated Stats.dat/.csd template
+    // table (GameLibrary MapModTemplates). Visitor delivers one display line per
+    // call, in panel order; `text` is valid only for the duration of the call.
+    // Empty outside a map. stat_row_index = Stats.dat row index; value is the raw
+    // final stat value. Append-only tail (2026-07-18, after enumerate_skill_stats).
+    void (*enumerate_area_mods)(PsdkAreaModVisitorFn cb, void* userdata);
 } HostAbi;
 
 #ifdef __cplusplus

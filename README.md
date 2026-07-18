@@ -28,10 +28,14 @@ and keeps a persistent per-map / per-session history.
   baselines over.
 - **Kill counter** — per-rarity (normal/magic/rare/unique) kills near you,
   drawn with the same monster icons the Radar uses; per-run and per-session
-  totals accumulate in Statistics.
+  totals accumulate in Statistics. Rogue Exiles are counted separately with
+  their own icon.
 - **Gold** — the character's gold total in the overlay with a "(+N)"
   picked-up-this-map counter; per-run/per-session gains persist in the
   statistics DB (vendor spending between visits doesn't distort them).
+- **Map modifiers** — each run records the area's modifiers (the same lines
+  the in-game area-info panel shows), collapsible under the run in Statistics.
+  Sourced from the host `ctx->Game.GetAreaMods()` SDK call.
 - **Hiveblood** — Genesis-tree resource total with per-map gains and a
   near-cap warning flash (read via the host, no raw offsets in the plugin).
 - **Atziri Beacons** — the temple-entry counter (N / 60) with a chime on each

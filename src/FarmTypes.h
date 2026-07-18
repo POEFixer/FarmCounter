@@ -31,8 +31,10 @@ struct MapRun {
     int                    killsMagic    = 0;    // across the run's areas/visits)
     int                    killsRare     = 0;
     int                    killsUnique   = 0;
+    int                    killsRogue    = 0;    // Rogue Exiles (tracked apart from Unique)
+    std::vector<std::string> mapMods;           // rendered area/map modifier lines (from ctx->Game.GetAreaMods)
 
-    int KillsTotal() const { return killsNormal + killsMagic + killsRare + killsUnique; }
+    int KillsTotal() const { return killsNormal + killsMagic + killsRare + killsUnique + killsRogue; }
 };
 
 struct InvSnapshot {

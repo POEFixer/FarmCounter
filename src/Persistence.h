@@ -35,6 +35,7 @@ struct OverlaySettings {
     bool  kcShowMagic       = true;
     bool  kcShowRare        = true;
     bool  kcShowUnique      = true;
+    bool  kcShowRogue       = true;   // Rogue Exile kill count (own icon)
     bool  hbWarnNearCap     = true;  // flash Hiveblood when near cap
     int   hbWarnThreshold   = 95000; // flash trigger (clamped [50000,100000] on load)
     bool  hbShowMapGains    = true;  // show the Hiveblood "(+N)" per-map gain label

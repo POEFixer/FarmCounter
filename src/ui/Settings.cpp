@@ -115,8 +115,22 @@ void RarityMark(IconTextures* icons, int rarity, ImVec4 dotCol) {
     RarityDot(dotCol);
 }
 
-// Per-rarity kill counts inline: monster icon + count per nonzero rarity, then "(total)".
-void KillsInline(IconTextures* icons, int n, int m, int r, int u) {
+// Rogue Exile inline marker: the radar atlas Rogue icon, dot fallback.
+void RogueMark(IconTextures* icons) {
+    if (icons) {
+        const AtlasIcon& ic = icons->RogueExile();
+        if (ic.valid) {
+            const float lh = ImGui::GetTextLineHeight();
+            ImGui::Image(ic.tex, ImVec2(lh, lh), ic.uv0, ic.uv1);
+            return;
+        }
+    }
+    RarityDot(ImVec4(0.85f, 0.35f, 0.15f, 1.f));
+}
+
+// Per-rarity kill counts inline: monster icon + count per nonzero rarity, then
+// the Rogue Exile count (own icon) and "(total)".
+void KillsInline(IconTextures* icons, int n, int m, int r, int u, int rogue) {
     struct { int v; int rarity; ImVec4 c; } parts[4] = {
         { n, 0, ImVec4(0.85f, 0.85f, 0.85f, 1.f) },   // Normal — white
         { m, 1, ImVec4(0.33f, 0.53f, 1.f,   1.f) },   // Magic — blue
@@ -130,7 +144,12 @@ void KillsInline(IconTextures* icons, int n, int m, int r, int u) {
         RarityMark(icons, p.rarity, p.c);
         ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", p.v); ImGui::SameLine(0.f, 8.f);
     }
-    if (any) ImGui::Text("(%d)", n + m + r + u);
+    if (rogue > 0) {
+        any = true;
+        RogueMark(icons);
+        ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", rogue); ImGui::SameLine(0.f, 8.f);
+    }
+    if (any) ImGui::Text("(%d)", n + m + r + u + rogue);
     else     ImGui::TextUnformatted("0");
 }
 
@@ -209,7 +228,7 @@ void LootTable(const SettingsDeps& d, const std::vector<LootEntry>& loot,
 
 struct RunAgg {
     int   maps = 0, seconds = 0, hiveblood = 0, beacons = 0;
-    int   killsN = 0, killsM = 0, killsR = 0, killsU = 0;
+    int   killsN = 0, killsM = 0, killsR = 0, killsU = 0, killsG = 0;
     long long gold = 0;
     float chaos = 0.f;
     void Add(const MapRun& r) {
@@ -218,8 +237,9 @@ struct RunAgg {
         gold += r.goldGain;
         killsN += r.killsNormal; killsM += r.killsMagic;
         killsR += r.killsRare;   killsU += r.killsUnique;
+        killsG += r.killsRogue;
     }
-    int KillsTotal() const { return killsN + killsM + killsR + killsU; }
+    int KillsTotal() const { return killsN + killsM + killsR + killsU + killsG; }
 };
 
 // Top loot entries by total value across a set of runs, deduped by name
@@ -294,7 +314,7 @@ bool DrawRunRow(const SettingsDeps& d, const MapRun& r, int idx, bool deletable,
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(FcTheme::kDim, "Kills:");
     ImGui::SameLine(0.f, 6.f);
-    KillsInline(d.icons, r.killsNormal, r.killsMagic, r.killsRare, r.killsUnique);
+    KillsInline(d.icons, r.killsNormal, r.killsMagic, r.killsRare, r.killsUnique, r.killsRogue);
     if (r.goldGain > 0) {
         ImGui::SameLine(0.f, 14.f);
         ImGui::TextColored(FcTheme::kGold, "Gold +%s", FormatThousands(r.goldGain).c_str());
@@ -310,6 +330,18 @@ bool DrawRunRow(const SettingsDeps& d, const MapRun& r, int idx, bool deletable,
     if (r.durationSec > 0 && r.totalChaos != 0.f) {
         const float pph = ChaosToDisplay(cur, r.totalChaos, useEx, divRate) / ((float)r.durationSec / 3600.f);
         ImGui::TextColored(FcTheme::kDim, "Rate: %.1f %s/h", pph, lbl);
+    }
+
+    // Map modifiers (collapsed by default — the panel can be long).
+    if (!r.mapMods.empty()) {
+        ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+        char mh[48]; snprintf(mh, sizeof(mh), "Map modifiers (%d)###mm", (int)r.mapMods.size());
+        if (ImGui::CollapsingHeader(mh)) {
+            ImGui::Indent(8.f);
+            for (const auto& line : r.mapMods)
+                ImGui::TextColored(FcTheme::kMod, "%s", line.c_str());
+            ImGui::Unindent(8.f);
+        }
     }
 
     char tid[32]; snprintf(tid, sizeof(tid), "##rl%lld", (long long)r.dbId);
@@ -564,7 +596,7 @@ void DrawStatisticsTab(const SettingsDeps& d) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(FcTheme::kDim, "Kills:");
         ImGui::SameLine(0.f, 6.f);
-        KillsInline(d.icons, agg.killsN, agg.killsM, agg.killsR, agg.killsU);
+        KillsInline(d.icons, agg.killsN, agg.killsM, agg.killsR, agg.killsU, agg.killsG);
         if (agg.gold > 0) {
             ImGui::SameLine(0.f, 14.f);
             ImGui::TextColored(FcTheme::kGold, "Gold +%s", FormatThousands(agg.gold).c_str());
@@ -851,12 +883,13 @@ void DrawKillsTab(const SettingsDeps& d) {
     if (ImGui::Checkbox("Normal##kc", &s.kcShowNormal)) save(); ImGui::SameLine();
     if (ImGui::Checkbox("Magic##kc",  &s.kcShowMagic))  save(); ImGui::SameLine();
     if (ImGui::Checkbox("Rare##kc",   &s.kcShowRare))   save(); ImGui::SameLine();
-    if (ImGui::Checkbox("Unique##kc", &s.kcShowUnique)) save();
+    if (ImGui::Checkbox("Unique##kc", &s.kcShowUnique)) save(); ImGui::SameLine();
+    if (ImGui::Checkbox("Rogue Exiles##kc", &s.kcShowRogue)) save();
 
     ImGui::SeparatorText("Counts (current area)");
-    ImGui::Text("Normal: %d  Magic: %d  Rare: %d  Unique: %d  Total: %d",
+    ImGui::Text("Normal: %d  Magic: %d  Rare: %d  Unique: %d  Rogue: %d  Total: %d",
                 d.kills->Normal(), d.kills->Magic(), d.kills->Rare(),
-                d.kills->Unique(), d.kills->Total());
+                d.kills->Unique(), d.kills->Rogue(), d.kills->Total());
     if (ImGui::SmallButton("Reset##kc")) d.kills->Reset();
     ImGui::TextDisabled("Per-run and per-session kill totals live in the Statistics tab.");
 }

@@ -129,7 +129,7 @@ private:
     // Per-area kill counters reset on every area change; the tracker folds their
     // per-frame deltas into the active run so a run's tally survives sub-zones
     // and hideout round-trips.
-    int m_KillsLastNormal = 0, m_KillsLastMagic = 0, m_KillsLastRare = 0, m_KillsLastUnique = 0;
+    int m_KillsLastNormal = 0, m_KillsLastMagic = 0, m_KillsLastRare = 0, m_KillsLastUnique = 0, m_KillsLastRogue = 0;
     bool m_KillsRebaseline = true;   // first sample after enable arms without attributing
 
     // Gold gain = accumulated POSITIVE deltas of the account gold total while in

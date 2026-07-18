@@ -259,6 +259,22 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
     // ── Per-run kill tally (delta over the per-area KillCounter) ─────────────
     AccumulateKills(kills);
 
+    // ── Map modifiers: capture once per run from the host. The core renders them
+    //    only inside a real map (empty otherwise) and can lag map-enter, so retry
+    //    for a bounded window rather than every frame forever. Not captured in a
+    //    pass-through sub-zone (Abyss/HungerBoss) — keep the map's own mods. ─────
+    if (m_InMap && !m_WasInPassThrough && m_ctx
+        && m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size()
+        && m_MapRuns[m_ActiveRunIdx].mapMods.empty()
+        && CurrentMapSec() < 20) {   // core has a 10s populate window; stop after 20s
+        auto mods = m_ctx->Game.GetAreaMods();
+        if (!mods.empty()) {
+            auto& dst = m_MapRuns[m_ActiveRunIdx].mapMods;
+            dst.clear(); dst.reserve(mods.size());
+            for (const auto& m : mods) dst.push_back(m.text);
+        }
+    }
+
     // ── Loot scan + live-run update ──────────────────────────────────────────
     if (m_InMap) ScanInventory();
     UpdateLiveRun();
@@ -298,6 +314,7 @@ void FarmTracker::AccumulateKills(const KillCounter* kills) {
         m_KillsLastMagic  = kills->Magic();
         m_KillsLastRare   = kills->Rare();
         m_KillsLastUnique = kills->Unique();
+        m_KillsLastRogue  = kills->Rogue();
         m_KillsRebaseline = false;
         return;
     }
@@ -313,6 +330,7 @@ void FarmTracker::AccumulateKills(const KillCounter* kills) {
     const int dm = delta(kills->Magic(),  m_KillsLastMagic);
     const int dr = delta(kills->Rare(),   m_KillsLastRare);
     const int du = delta(kills->Unique(), m_KillsLastUnique);
+    const int dg = delta(kills->Rogue(),  m_KillsLastRogue);
     if (!m_InMap) return;   // deltas outside a run are tracked but not attributed
     if (m_ActiveRunIdx < 0 || m_ActiveRunIdx >= (int)m_MapRuns.size()) return;
     MapRun& r = m_MapRuns[m_ActiveRunIdx];
@@ -320,6 +338,7 @@ void FarmTracker::AccumulateKills(const KillCounter* kills) {
     r.killsMagic  += dm;
     r.killsRare   += dr;
     r.killsUnique += du;
+    r.killsRogue  += dg;
 }
 
 // ── Inventory scan orchestration ─────────────────────────────────────────────
