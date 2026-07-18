@@ -37,9 +37,10 @@ inline const char* CurrencyLabel(int oc) {
     return "ex";
 }
 
-std::string FormatThousands(int32_t n) {
+std::string FormatThousands(long long n) {
     std::string s = std::to_string(n);
-    for (int i = (int)s.size() - 3; i > 0; i -= 3) s.insert(i, ",");
+    const int stop = (n < 0) ? 1 : 0;   // don't split a leading minus
+    for (int i = (int)s.size() - 3; i > stop; i -= 3) s.insert(i, ",");
     return s;
 }
 
@@ -88,8 +89,8 @@ bool ConfirmSmallButton(const char* text, const char* strId) {
     return false;
 }
 
-// Small colored square ("rarity dot") drawn inline at the cursor (mirrors the
-// overlay's KcDrawRarityDot).
+// Small colored square ("rarity dot") drawn inline at the cursor — fallback
+// when the radar atlas isn't available.
 void RarityDot(ImVec4 col) {
     float sz  = ImGui::GetTextLineHeight() * 0.70f;
     float pad = (ImGui::GetTextLineHeight() - sz) * 0.5f;
@@ -100,20 +101,34 @@ void RarityDot(ImVec4 col) {
     ImGui::Dummy(ImVec2(sz + 3.f, ImGui::GetTextLineHeight()));
 }
 
-// Per-rarity kill counts inline: dot+count per nonzero rarity, then "(total)".
-void KillsInline(int n, int m, int r, int u) {
-    struct { int v; ImVec4 c; } parts[4] = {
-        { n, ImVec4(0.85f, 0.85f, 0.85f, 1.f) },   // Normal — white
-        { m, ImVec4(0.33f, 0.53f, 1.f,   1.f) },   // Magic — blue
-        { r, ImVec4(1.f,   0.87f, 0.2f,  1.f) },   // Rare — yellow
-        { u, ImVec4(1.f,   0.5f,  0.1f,  1.f) },   // Unique — orange
+// One rarity marker: the radar-atlas monster icon (same sprites the Radar draws
+// for mobs), colored-dot fallback when the atlas is missing.
+void RarityMark(IconTextures* icons, int rarity, ImVec4 dotCol) {
+    if (icons) {
+        const AtlasIcon& ic = icons->Monster(rarity);
+        if (ic.valid) {
+            const float lh = ImGui::GetTextLineHeight();
+            ImGui::Image(ic.tex, ImVec2(lh, lh), ic.uv0, ic.uv1);
+            return;
+        }
+    }
+    RarityDot(dotCol);
+}
+
+// Per-rarity kill counts inline: monster icon + count per nonzero rarity, then "(total)".
+void KillsInline(IconTextures* icons, int n, int m, int r, int u) {
+    struct { int v; int rarity; ImVec4 c; } parts[4] = {
+        { n, 0, ImVec4(0.85f, 0.85f, 0.85f, 1.f) },   // Normal — white
+        { m, 1, ImVec4(0.33f, 0.53f, 1.f,   1.f) },   // Magic — blue
+        { r, 2, ImVec4(1.f,   0.87f, 0.2f,  1.f) },   // Rare — yellow
+        { u, 3, ImVec4(1.f,   0.5f,  0.1f,  1.f) },   // Unique — orange
     };
     bool any = false;
     for (const auto& p : parts) {
         if (p.v <= 0) continue;
         any = true;
-        RarityDot(p.c);
-        ImGui::SameLine(0.f, 0.f); ImGui::Text("%d", p.v); ImGui::SameLine(0.f, 8.f);
+        RarityMark(icons, p.rarity, p.c);
+        ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", p.v); ImGui::SameLine(0.f, 8.f);
     }
     if (any) ImGui::Text("(%d)", n + m + r + u);
     else     ImGui::TextUnformatted("0");
@@ -195,10 +210,12 @@ void LootTable(const SettingsDeps& d, const std::vector<LootEntry>& loot,
 struct RunAgg {
     int   maps = 0, seconds = 0, hiveblood = 0, beacons = 0;
     int   killsN = 0, killsM = 0, killsR = 0, killsU = 0;
+    long long gold = 0;
     float chaos = 0.f;
     void Add(const MapRun& r) {
         maps++; seconds += r.durationSec; chaos += r.totalChaos;
         hiveblood += r.hivebloodGain; beacons += r.beaconGain;
+        gold += r.goldGain;
         killsN += r.killsNormal; killsM += r.killsMagic;
         killsR += r.killsRare;   killsU += r.killsUnique;
     }
@@ -277,7 +294,11 @@ bool DrawRunRow(const SettingsDeps& d, const MapRun& r, int idx, bool deletable,
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(FcTheme::kDim, "Kills:");
     ImGui::SameLine(0.f, 6.f);
-    KillsInline(r.killsNormal, r.killsMagic, r.killsRare, r.killsUnique);
+    KillsInline(d.icons, r.killsNormal, r.killsMagic, r.killsRare, r.killsUnique);
+    if (r.goldGain > 0) {
+        ImGui::SameLine(0.f, 14.f);
+        ImGui::TextColored(FcTheme::kGold, "Gold +%s", FormatThousands(r.goldGain).c_str());
+    }
     if (r.hivebloodGain > 0) {
         ImGui::SameLine(0.f, 14.f);
         ImGui::TextColored(FcTheme::kHive, "Hiveblood +%s", FormatThousands(r.hivebloodGain).c_str());
@@ -313,6 +334,7 @@ void DrawSettingsTab(const SettingsDeps& d) {
     if (ImGui::Checkbox("Show Item List",      &s.showItems))         save();
     if (ImGui::Checkbox("Show Unpriced Items", &s.showUnpriced))      save();
     if (ImGui::Checkbox("Show Profit/Hour",    &s.showProfitPerHour)) save();
+    if (ImGui::Checkbox("Show Gold (total + map gain)", &s.goldShow)) save();
 
     ImGui::SeparatorText("Display");
     ImGui::TextUnformatted("Overlay currency:");
@@ -542,7 +564,11 @@ void DrawStatisticsTab(const SettingsDeps& d) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(FcTheme::kDim, "Kills:");
         ImGui::SameLine(0.f, 6.f);
-        KillsInline(agg.killsN, agg.killsM, agg.killsR, agg.killsU);
+        KillsInline(d.icons, agg.killsN, agg.killsM, agg.killsR, agg.killsU);
+        if (agg.gold > 0) {
+            ImGui::SameLine(0.f, 14.f);
+            ImGui::TextColored(FcTheme::kGold, "Gold +%s", FormatThousands(agg.gold).c_str());
+        }
         if (agg.hiveblood > 0) {
             ImGui::SameLine(0.f, 14.f);
             ImGui::TextColored(FcTheme::kHive, "Hiveblood +%s", FormatThousands(agg.hiveblood).c_str());
@@ -580,13 +606,21 @@ void DrawStatisticsTab(const SettingsDeps& d) {
                 ImGui::TextColored(FcTheme::kDim, "Average: %.2f %s/map   %.1f %s/h",
                                    agg.maps > 0 ? total / (float)agg.maps : 0.f, lbl,
                                    total / ((float)agg.seconds / 3600.f), lbl);
-            if (agg.hiveblood > 0 || agg.beacons > 0) {
-                if (agg.hiveblood > 0) {
-                    ImGui::TextColored(FcTheme::kHive, "Hiveblood +%s", FormatThousands(agg.hiveblood).c_str());
-                    if (agg.beacons > 0) ImGui::SameLine(0.f, 14.f);
+            if (agg.gold > 0 || agg.hiveblood > 0 || agg.beacons > 0) {
+                bool first = true;
+                if (agg.gold > 0) {
+                    ImGui::TextColored(FcTheme::kGold, "Gold +%s", FormatThousands(agg.gold).c_str());
+                    first = false;
                 }
-                if (agg.beacons > 0)
+                if (agg.hiveblood > 0) {
+                    if (!first) ImGui::SameLine(0.f, 14.f);
+                    ImGui::TextColored(FcTheme::kHive, "Hiveblood +%s", FormatThousands(agg.hiveblood).c_str());
+                    first = false;
+                }
+                if (agg.beacons > 0) {
+                    if (!first) ImGui::SameLine(0.f, 14.f);
                     ImGui::TextColored(FcTheme::kIncur, "Beacons +%d", agg.beacons);
+                }
             }
             if (best && best->totalChaos > 0.f) {
                 const float bv = ChaosToDisplay(cur, best->totalChaos,

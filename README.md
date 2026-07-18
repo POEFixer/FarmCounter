@@ -27,7 +27,11 @@ and keeps a persistent per-map / per-session history.
   back to the same instance resumes it, carrying loot, duration and resource
   baselines over.
 - **Kill counter** — per-rarity (normal/magic/rare/unique) kills near you,
-  reset per area.
+  drawn with the same monster icons the Radar uses; per-run and per-session
+  totals accumulate in Statistics.
+- **Gold** — the character's gold total in the overlay with a "(+N)"
+  picked-up-this-map counter; per-run/per-session gains persist in the
+  statistics DB (vendor spending between visits doesn't distort them).
 - **Hiveblood** — Genesis-tree resource total with per-map gains and a
   near-cap warning flash (read via the host, no raw offsets in the plugin).
 - **Atziri Beacons** — the temple-entry counter (N / 60) with a chime on each

@@ -95,6 +95,7 @@ void FarmDb::CreateTables() {
           exalted_rate REAL NOT NULL DEFAULT 1,
           hiveblood_gain INTEGER NOT NULL DEFAULT 0,
           beacon_gain INTEGER NOT NULL DEFAULT 0,
+          gold_gain INTEGER NOT NULL DEFAULT 0,
           kills_normal INTEGER NOT NULL DEFAULT 0,
           kills_magic INTEGER NOT NULL DEFAULT 0,
           kills_rare INTEGER NOT NULL DEFAULT 0,
@@ -115,6 +116,9 @@ void FarmDb::CreateTables() {
         CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(archived, session_id);
         CREATE INDEX IF NOT EXISTS idx_loot_run ON loot(run_id);
     )");
+    // Column added after the first shipped schema (v53): a no-op error on fresh
+    // DBs (duplicate column), upgrades pre-gold DBs in place (Exec swallows it).
+    Exec("ALTER TABLE runs ADD COLUMN gold_gain INTEGER NOT NULL DEFAULT 0;");
 }
 
 void FarmDb::LoadAll(std::vector<MapRun>& runs, int& sessionActiveSec, int& sessionIdMax) {
@@ -123,7 +127,7 @@ void FarmDb::LoadAll(std::vector<MapRun>& runs, int& sessionActiveSec, int& sess
 
     Stmt s(m_db, "SELECT id, map_name, started_at, started_text, duration_sec, total_chaos, "
                  "exalted_rate, hiveblood_gain, beacon_gain, kills_normal, kills_magic, "
-                 "kills_rare, kills_unique, session_id, archived "
+                 "kills_rare, kills_unique, session_id, archived, gold_gain "
                  "FROM runs ORDER BY started_at, id;");
     while (s.Step()) {
         MapRun r;
@@ -142,6 +146,7 @@ void FarmDb::LoadAll(std::vector<MapRun>& runs, int& sessionActiveSec, int& sess
         r.killsUnique   = s.Int(12);
         r.sessionId     = s.Int(13);
         r.archived      = s.Int(14) != 0;
+        r.goldGain      = s.Int(15);
         runs.push_back(std::move(r));
     }
     // Attach loot per run (run counts are small; a query per run is fine here).
@@ -183,8 +188,8 @@ void FarmDb::InsertRun(MapRun& run) {
     if (run.startedText.empty()) run.startedText = FormatLocalTime(run.startedAt);
     Stmt s(m_db, "INSERT INTO runs (map_name, started_at, started_text, duration_sec, "
                  "total_chaos, exalted_rate, hiveblood_gain, beacon_gain, kills_normal, "
-                 "kills_magic, kills_rare, kills_unique, session_id, archived) "
-                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);");
+                 "kills_magic, kills_rare, kills_unique, session_id, archived, gold_gain) "
+                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15);");
     s.BindText(1, run.mapName);
     s.BindI64 (2, run.startedAt);
     s.BindText(3, run.startedText);
@@ -199,6 +204,7 @@ void FarmDb::InsertRun(MapRun& run) {
     s.BindInt(12, run.killsUnique);
     s.BindInt(13, run.sessionId);
     s.BindInt(14, run.archived ? 1 : 0);
+    s.BindInt(15, run.goldGain);
     s.Run();
     run.dbId = sqlite3_last_insert_rowid(m_db);
 }
@@ -223,7 +229,8 @@ void FarmDb::UpdateRun(const MapRun& run) {
     Exec("BEGIN;");
     Stmt s(m_db, "UPDATE runs SET map_name=?2, duration_sec=?3, total_chaos=?4, exalted_rate=?5, "
                  "hiveblood_gain=?6, beacon_gain=?7, kills_normal=?8, kills_magic=?9, "
-                 "kills_rare=?10, kills_unique=?11, session_id=?12, archived=?13 WHERE id=?1;");
+                 "kills_rare=?10, kills_unique=?11, session_id=?12, archived=?13, gold_gain=?14 "
+                 "WHERE id=?1;");
     s.BindI64 (1, run.dbId);
     s.BindText(2, run.mapName);
     s.BindInt (3, run.durationSec);
@@ -237,6 +244,7 @@ void FarmDb::UpdateRun(const MapRun& run) {
     s.BindInt(11, run.killsUnique);
     s.BindInt(12, run.sessionId);
     s.BindInt(13, run.archived ? 1 : 0);
+    s.BindInt(14, run.goldGain);
     s.Run();
     ReplaceLoot(run.dbId, run.loot);
     Exec("COMMIT;");

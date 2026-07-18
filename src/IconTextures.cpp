@@ -1,5 +1,6 @@
 #include "IconTextures.h"
 #include <Windows.h>
+#include <nlohmann/json.hpp>
 #include <fstream>
 #include <vector>
 #include <filesystem>
@@ -62,6 +63,58 @@ const IconTex& IconTextures::Currency(int idx) const {
     return m_ex;  // 0 or out-of-range
 }
 
+void IconTextures::LoadRadarAtlas() {
+    if (!m_device || m_atlas.valid) return;
+    wchar_t exe[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
+    fs::path base = fs::path(exe).parent_path() / L"Resources" / L"radar";
+    m_atlas = LoadPngFile(m_device, (base / L"icons.png").wstring());
+    if (!m_atlas.valid || m_atlas.w <= 0 || m_atlas.h <= 0) return;
+
+    // Grid cells of the per-rarity monster icons — the radar's icons.json
+    // positions, with the KillCount plugin's hardcoded values as fallback.
+    struct Slot { const char* name; int gx, gy; };
+    Slot slots[4] = {
+        { "Normal Monster", 0, 14 },
+        { "Magic Monster",  6,  3 },
+        { "Rare Monster",   4, 57 },
+        { "Unique Monster", 6, 57 },
+    };
+    std::ifstream f(base / L"icons.json");
+    if (f.is_open()) {
+        nlohmann::json j = nlohmann::json::parse(f, nullptr, /*allow_exceptions=*/false);
+        if (!j.is_discarded() && j.is_array()) {
+            for (const auto& item : j) {
+                if (!item.is_object()) continue;
+                auto nit = item.find("name");
+                if (nit == item.end() || !nit->is_string()) continue;
+                const std::string name = nit->get<std::string>();
+                for (auto& s : slots) {
+                    if (name != s.name) continue;
+                    auto gxIt = item.find("gridX"), gyIt = item.find("gridY");
+                    if (gxIt != item.end() && gxIt->is_number()) s.gx = (int)gxIt->get<double>();
+                    if (gyIt != item.end() && gyIt->is_number()) s.gy = (int)gyIt->get<double>();
+                }
+            }
+        }
+    }
+
+    constexpr float kCell = 64.0f;   // radar atlas grid size
+    const float cu = kCell / (float)m_atlas.w;
+    const float cv = kCell / (float)m_atlas.h;
+    for (int i = 0; i < 4; i++) {
+        m_monster[i].tex   = m_atlas.srv;
+        m_monster[i].uv0   = ImVec2(slots[i].gx * cu, slots[i].gy * cv);
+        m_monster[i].uv1   = ImVec2((slots[i].gx + 1) * cu, (slots[i].gy + 1) * cv);
+        m_monster[i].valid = true;
+    }
+}
+
+const AtlasIcon& IconTextures::Monster(int rarity) const {
+    if (rarity < 0 || rarity > 3) return m_atlasEmpty;
+    return m_monster[rarity];
+}
+
 IconTex IconTextures::Item(const std::string& localPngPath) {
     if (localPngPath.empty()) return IconTex{};
     auto it = m_items.find(localPngPath);
@@ -78,6 +131,8 @@ IconTex IconTextures::Item(const std::string& localPngPath) {
 void IconTextures::Release() {
     auto rel = [](IconTex& t){ if (t.srv) { reinterpret_cast<ID3D11ShaderResourceView*>(t.srv)->Release(); } t = IconTex{}; };
     rel(m_ex); rel(m_div); rel(m_chaos);
+    rel(m_atlas);
+    for (auto& m : m_monster) m = AtlasIcon{};
     for (auto& kv : m_items) rel(kv.second);
     m_items.clear();
 }

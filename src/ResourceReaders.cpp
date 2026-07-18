@@ -33,6 +33,7 @@ void ResourceReaders::Tick(const PluginSDK::Context* ctx, bool allowBeaconSearch
     m_lastTick = now; m_primed = true;
 
     ReadHiveblood(ctx);
+    ReadGold(ctx);
     ReadBeacons(ctx, allowBeaconSearch);
 }
 
@@ -42,6 +43,17 @@ void ResourceReaders::ReadHiveblood(const PluginSDK::Context* c) {
     if (ok)                  { m_hb.ok = true; m_hb.total = hb; m_hb.cached = false; }
     else if (m_hb.total > 0) { m_hb.ok = true; m_hb.cached = true; } // keep last-seen, flag stale
     else                     { m_hb.ok = false; }
+}
+
+void ResourceReaders::ReadGold(const PluginSDK::Context* c) {
+    // Host-side ServerData read (offsets maintained centrally). GetGold returns
+    // 0 when the value is unavailable — a genuinely-zero balance therefore shows
+    // as the last-seen value until the first positive read, same tradeoff as
+    // Hiveblood's cached fallback.
+    const int g = c->Game.GetGold();
+    if (g > 0)               { m_gd.ok = true; m_gd.total = g; m_gd.cached = false; }
+    else if (m_gd.total > 0) { m_gd.ok = true; m_gd.cached = true; } // keep last-seen, flag stale
+    else                     { m_gd.ok = false; }
 }
 
 // ── Atziri beacon counter ────────────────────────────────────────────────────

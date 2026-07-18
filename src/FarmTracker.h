@@ -30,6 +30,7 @@ public:
     void OnFrame(const PluginSDK::Snapshot& snap,
                  const ResourceReaders::HbState& hb,
                  const ResourceReaders::ItState& it,
+                 const ResourceReaders::GdState& gold,
                  const KillCounter* kills);
 
     // Escape-menu pause: while paused all wall-clock anchors are frozen; on
@@ -56,6 +57,11 @@ public:
     int  CurrentSessionId() const { return m_CurrentSessionId; }
     int  ActiveRunIndex()   const { return m_ActiveRunIdx; }   // -1 = none (live run is not deletable)
     bool DbOpen()           const { return m_db.IsOpen(); }
+    // Gold picked up in the current map run (0 when no live run).
+    int  CurrentGoldGain()  const {
+        return (m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size())
+            ? m_MapRuns[m_ActiveRunIdx].goldGain : 0;
+    }
 
     // Resource display getters
     bool    HbHasBaseline() const { return m_HbHasBaseline; }
@@ -124,6 +130,12 @@ private:
     // per-frame deltas into the active run so a run's tally survives sub-zones
     // and hideout round-trips.
     int m_KillsLastNormal = 0, m_KillsLastMagic = 0, m_KillsLastRare = 0, m_KillsLastUnique = 0;
+    bool m_KillsRebaseline = true;   // first sample after enable arms without attributing
+
+    // Gold gain = accumulated POSITIVE deltas of the account gold total while in
+    // a map (spending at hideout/town vendors between visits never distorts the
+    // run's gain, unlike a baseline-vs-total scheme). -1 = unarmed.
+    int m_GoldLast = -1;
 
     // Hiveblood map-gain baseline (+ carryover across hideout round-trips)
     int32_t m_HbBaseline    = 0;

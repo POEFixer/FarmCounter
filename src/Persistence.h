@@ -16,6 +16,7 @@ struct OverlaySettings {
     bool  showItems         = true;
     bool  showUnpriced      = false;
     bool  showProfitPerHour = true;
+    bool  goldShow          = true;  // gold total + map gain row in the overlay
     int   overlayCurrency   = 0;
     float windowAlpha       = 0.9f;
     float windowPosX        = -1.0f;

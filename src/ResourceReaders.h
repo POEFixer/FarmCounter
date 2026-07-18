@@ -25,6 +25,7 @@ class ResourceReaders {
 public:
     struct HbState { bool ok = false; int32_t total = 0; bool cached = false; };
     struct ItState { bool ok = false; int cur = 0; int max = 0; };
+    struct GdState { bool ok = false; int total = 0; bool cached = false; };
 
     // Call once per frame; rate-limits internally (~6 Hz). allowBeaconSearch
     // gates only the BFS *re-find* (pass false in town/hideout so idle areas
@@ -32,6 +33,7 @@ public:
     void Tick(const PluginSDK::Context* ctx, bool allowBeaconSearch);
     HbState Hiveblood() const { return m_hb; }
     ItState Incursion() const { return m_it; }  // Atziri beacons (legacy name kept for callers)
+    GdState Gold()      const { return m_gd; }  // character gold (host ServerData read)
 
     // Parses a beacon counter string. Accepted (must END the string, len <= 48):
     //   quality 2:  "<anything>>> N/60"   (the live UI format)
@@ -42,6 +44,7 @@ public:
 
 private:
     void ReadHiveblood(const PluginSDK::Context* ctx);
+    void ReadGold(const PluginSDK::Context* ctx);
     void ReadBeacons(const PluginSDK::Context* ctx, bool allowSearch);
     // Probes both string slots of `el`; on match fills cur/max, which slot
     // (probe: 0 = Ui.GetText, 1 = legacy +0x390) and the match quality.
@@ -51,6 +54,7 @@ private:
 
     HbState m_hb;
     ItState m_it;
+    GdState m_gd;
 
     // Cached beacon element (0 = none) + which string slot matched it.
     uintptr_t m_itElement = 0;

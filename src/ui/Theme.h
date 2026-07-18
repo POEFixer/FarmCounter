@@ -18,6 +18,7 @@ inline const ImVec4 kAccent = ImVec4(1.00f, 0.85f, 0.30f, 1.0f);  // highlight /
 inline const ImVec4 kDim    = ImVec4(0.70f, 0.70f, 0.70f, 1.0f);  // secondary / muted text
 inline const ImVec4 kHive   = ImVec4(0.78f, 0.45f, 0.95f, 1.0f);  // Hiveblood accent
 inline const ImVec4 kIncur  = ImVec4(0.90f, 0.60f, 0.10f, 1.0f);  // Incursion accent
+inline const ImVec4 kGold   = ImVec4(0.98f, 0.80f, 0.25f, 1.0f);  // Gold counter accent
 
 } // namespace FcTheme
 
@@ -45,6 +46,9 @@ inline const ImVec4 kIncur  = ImVec4(0.90f, 0.60f, 0.10f, 1.0f);  // Incursion a
 #ifndef ICON_FA_TROPHY
 #define ICON_FA_TROPHY         "\xef\x82\x91"  // U+f091
 #endif
+#ifndef ICON_FA_COINS
+#define ICON_FA_COINS          "\xef\x94\x9e"  // U+f51e
+#endif
 
 // ── Semantic glyph aliases for the FarmCounter overlay/settings ───────────────
 namespace FcGlyph {
@@ -55,4 +59,5 @@ namespace FcGlyph {
     inline constexpr const char* Map     = ICON_FA_MAP;             // maps run / area
     inline constexpr const char* Item    = ICON_FA_GEM;             // item / drop / currency
     inline constexpr const char* Trophy  = ICON_FA_TROPHY;          // best run / record
+    inline constexpr const char* Gold    = ICON_FA_COINS;           // character gold counter
 } // namespace FcGlyph

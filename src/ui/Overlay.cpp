@@ -76,30 +76,44 @@ void KcDrawRarityDot(ImVec4 col) {
     ImGui::Dummy(ImVec2(sz + 3.f, ImGui::GetTextLineHeight()));
 }
 
-// Per-rarity kill counts rendered inline (port of old DrawKillCountOverlayLine,
-// FarmCounter.cpp:1224-1263). The caller has already drawn the Kills glyph +
-// SameLine, so this emits only the value: per-rarity colored dot + count for each
-// enabled rarity followed by "(total)", or the bare total when all rarities are
-// off. The kcShow master gate is handled by the caller.
-void DrawKillCountInline(const KillCounter& kc, const OverlaySettings& s) {
+// One rarity marker: the radar-atlas monster icon (same sprites the Radar draws
+// for mobs) when the atlas is loaded, else the legacy colored dot.
+void KcDrawRarityMark(const IconTextures* icons, int rarity, ImVec4 dotCol) {
+    if (icons) {
+        const AtlasIcon& ic = icons->Monster(rarity);
+        if (ic.valid) {
+            const float lh = ImGui::GetTextLineHeight();
+            ImGui::Image(ic.tex, ImVec2(lh, lh), ic.uv0, ic.uv1);
+            return;
+        }
+    }
+    KcDrawRarityDot(dotCol);
+}
+
+// Per-rarity kill counts rendered inline. The caller has already drawn the
+// Kills glyph + SameLine, so this emits only the value: per-rarity radar
+// monster icon (colored-dot fallback) + count for each enabled rarity followed
+// by "(total)", or the bare total when all rarities are off. The kcShow master
+// gate is handled by the caller.
+void DrawKillCountInline(const IconTextures* icons, const KillCounter& kc, const OverlaySettings& s) {
     const int  total = kc.Total();
     const bool any   = s.kcShowNormal || s.kcShowMagic || s.kcShowRare || s.kcShowUnique;
     if (!any) { ImGui::Text("%d", total); return; }
     if (s.kcShowNormal) {                                   // Normal — white
-        KcDrawRarityDot(ImVec4(0.85f, 0.85f, 0.85f, 1.f));
-        ImGui::SameLine(0.f, 0.f); ImGui::Text("%d", kc.Normal()); ImGui::SameLine(0.f, 8.f);
+        KcDrawRarityMark(icons, 0, ImVec4(0.85f, 0.85f, 0.85f, 1.f));
+        ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", kc.Normal()); ImGui::SameLine(0.f, 8.f);
     }
     if (s.kcShowMagic) {                                    // Magic — blue
-        KcDrawRarityDot(ImVec4(0.33f, 0.53f, 1.f, 1.f));
-        ImGui::SameLine(0.f, 0.f); ImGui::Text("%d", kc.Magic()); ImGui::SameLine(0.f, 8.f);
+        KcDrawRarityMark(icons, 1, ImVec4(0.33f, 0.53f, 1.f, 1.f));
+        ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", kc.Magic()); ImGui::SameLine(0.f, 8.f);
     }
     if (s.kcShowRare) {                                     // Rare — yellow
-        KcDrawRarityDot(ImVec4(1.f, 0.87f, 0.2f, 1.f));
-        ImGui::SameLine(0.f, 0.f); ImGui::Text("%d", kc.Rare()); ImGui::SameLine(0.f, 8.f);
+        KcDrawRarityMark(icons, 2, ImVec4(1.f, 0.87f, 0.2f, 1.f));
+        ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", kc.Rare()); ImGui::SameLine(0.f, 8.f);
     }
     if (s.kcShowUnique) {                                   // Unique — orange
-        KcDrawRarityDot(ImVec4(1.f, 0.5f, 0.1f, 1.f));
-        ImGui::SameLine(0.f, 0.f); ImGui::Text("%d", kc.Unique()); ImGui::SameLine(0.f, 8.f);
+        KcDrawRarityMark(icons, 3, ImVec4(1.f, 0.5f, 0.1f, 1.f));
+        ImGui::SameLine(0.f, 2.f); ImGui::Text("%d", kc.Unique()); ImGui::SameLine(0.f, 8.f);
     }
     ImGui::Text("(%d)", total);
 }
@@ -340,27 +354,42 @@ void RenderOverlay(const OverlayDeps& d) {
             ImGui::Separator();
             ImGui::TextColored(FcTheme::kDim, "%s", FcGlyph::Kills);
             ImGui::SameLine(0.f, 4.f);
-            DrawKillCountInline(*d.kills, s);
+            DrawKillCountInline(d.icons, *d.kills, s);
         }
     }
 
     if (!tr.SessionRunning())
         ImGui::TextColored(FcTheme::kLoss, "Paused — resumes on next map");
 
-    // ── Inline resource bars (Hiveblood / Incursion) ───────────────────────────
+    // ── Inline resource rows (Gold / Hiveblood / Atziri beacons) ───────────────
     bool barsDrawn = false;
     {
         ResourceReaders::HbState hb = d.resources->Hiveblood();
         ResourceReaders::ItState it = d.resources->Incursion();
+        ResourceReaders::GdState gd = d.resources->Gold();
         const bool showIt = s.itShow && !s.itSeparate;
         const bool showHb = s.hbShow;
         const bool itOk = showIt && it.ok;
         const bool hbOk = showHb && hb.ok;
+        const bool gdOk = s.goldShow && gd.ok;
 
-        if (itOk || hbOk) {
+        if (itOk || hbOk || gdOk) {
             ImGui::Separator();
             barsDrawn = true;
             const float barH = lineH * 0.55f;
+
+            if (gdOk) {
+                // Text-only row (gold has no cap, so no progress bar): coin glyph,
+                // account total, "(+N)" picked up this map. Dimmed on a stale read.
+                const ImVec4 col = ImVec4(FcTheme::kGold.x, FcTheme::kGold.y,
+                                          FcTheme::kGold.z, gd.cached ? 0.65f : 1.f);
+                ImGui::TextColored(col, "%s", FcGlyph::Gold);
+                ImGui::SameLine(0.f, 4.f);
+                std::string lbl = FormatThousands(gd.total);
+                const int gain = tr.CurrentGoldGain();
+                if (inMap && gain > 0) lbl += " (+" + FormatThousands(gain) + ")";
+                ImGui::TextColored(col, "%s", lbl.c_str());
+            }
 
             if (itOk) {
                 int gain = (inMap && tr.ItHasBaseline() && it.cur > tr.ItBaseline())

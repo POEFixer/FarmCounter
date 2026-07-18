@@ -26,6 +26,7 @@ struct MapRun {
     int                    sessionId     = 0;
     int                    hivebloodGain = 0;
     int                    beaconGain    = 0;    // Atziri beacons gained this run
+    int                    goldGain      = 0;    // gold picked up this run (positive deltas only)
     int                    killsNormal   = 0;    // per-run kill tally (accumulated
     int                    killsMagic    = 0;    // across the run's areas/visits)
     int                    killsRare     = 0;

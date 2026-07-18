@@ -23,6 +23,29 @@ void FarmTracker::OnEnable() {
     if (!m_db.Open(m_dir) && m_ctx)
         m_ctx->Log.Error("[FarmCounter] farmstats.db failed to open — statistics won't persist");
     m_db.LoadAll(m_MapRuns, m_SessionActiveSec, m_CurrentSessionId);
+    // The host re-enables the SAME plugin instance, so tracking members persist
+    // across disable→enable. Reset them: the current map (if any) re-detects on
+    // the next frame and starts a FRESH run — otherwise a stale m_ActiveRunIdx
+    // could point into the reloaded vector and stale gold/kill baselines would
+    // attribute everything gained while disabled to the next run.
+    m_CurrentAreaHash.clear();
+    m_MapAreaHash.clear();
+    m_MapZoneName.clear();
+    m_InMap         = false;
+    m_ActiveRunIdx  = -1;
+    m_AccumulatedDurationSec = 0;
+    m_IsResume         = false;
+    m_WasInPassThrough = false;
+    m_LootLog.clear();
+    m_CarryoverLoot.clear();
+    m_BaselineSnap.clear();
+    m_BaselineCandidate.clear();
+    m_BaselineReady = false;
+    m_NeedBaseline  = true;
+    m_scanner.ResetTiming();
+    m_GoldLast        = -1;    // first fresh read only arms, never attributes
+    m_KillsRebaseline = true;  // ditto for the per-area kill counters
+    m_Paused = false;
     auto now = Clock::now();
     m_ZoneEnterTime       = now;
     m_HideoutEnterTime    = now;
@@ -71,6 +94,7 @@ int FarmTracker::CurrentMapSec() const {
 void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
                           const ResourceReaders::HbState& hb,
                           const ResourceReaders::ItState& it,
+                          const ResourceReaders::GdState& gold,
                           const KillCounter* kills) {
     if (!m_ctx) return;
     if (!snap.IsAttached) return;
@@ -218,6 +242,20 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
         }
     }
 
+    // ── Per-run gold tally: accumulate POSITIVE deltas of the account total on
+    //    fresh reads only. Pickups in a map raise the total; spending happens at
+    //    vendors (town/hideout) and is deliberately ignored, so a hideout
+    //    round-trip never deflates the run's gain. ──────────────────────────────
+    if (gold.ok && !gold.cached) {
+        if (m_GoldLast >= 0) {
+            const int delta = gold.total - m_GoldLast;
+            if (delta > 0 && m_InMap &&
+                m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size())
+                m_MapRuns[m_ActiveRunIdx].goldGain += delta;
+        }
+        m_GoldLast = gold.total;   // arm/refresh (first read never counts)
+    }
+
     // ── Per-run kill tally (delta over the per-area KillCounter) ─────────────
     AccumulateKills(kills);
 
@@ -253,6 +291,16 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
 
 void FarmTracker::AccumulateKills(const KillCounter* kills) {
     if (!kills) return;
+    if (m_KillsRebaseline) {
+        // First sample after enable: sync the last-seen counters without
+        // attributing anything (the KillCounter kept counting while disabled).
+        m_KillsLastNormal = kills->Normal();
+        m_KillsLastMagic  = kills->Magic();
+        m_KillsLastRare   = kills->Rare();
+        m_KillsLastUnique = kills->Unique();
+        m_KillsRebaseline = false;
+        return;
+    }
     // The KillCounter resets on every area change (value drops back down) — a
     // drop re-baselines the delta instead of going negative, so kills keep
     // accumulating across a run's sub-zones and hideout round-trips.

@@ -89,7 +89,8 @@ public:
     const char* GetName() const override { return "FarmCounter"; }
 
     bool WantsOverlay() const override {
-        return m_settings.wantsOverlay || m_settings.itShow || m_settings.hbShow;
+        return m_settings.wantsOverlay || m_settings.itShow || m_settings.hbShow
+            || m_settings.goldShow;
     }
 
     void OnEnable(bool /*isGameAttached*/) override {
@@ -102,6 +103,7 @@ public:
         m_prices.SetContext(ctx());
         m_icons.SetDevice(static_cast<ID3D11Device*>(ctx()->D3DDevice));
         m_icons.LoadCurrencyIcons();
+        m_icons.LoadRadarAtlas();   // radar monster icons for the kill counter
         m_tracker.Init(ctx(), &m_prices, &m_zones, m_dir);  // Init BEFORE OnEnable
         m_tracker.OnEnable();                               // OnEnable loads the map history
         ctx()->Log.Info("FarmCounter " ZONETIMER_VERSION " enabled");
@@ -129,7 +131,8 @@ public:
         // Beacon-element BFS re-find only runs outside town/hideout — idle areas
         // never pay for UI-tree sweeps (a cached element still refreshes there).
         m_resources.Tick(ctx(), !snap.IsTown && !snap.IsHideout);
-        m_tracker.OnFrame(snap, m_resources.Hiveblood(), m_resources.Incursion(), &m_kills);
+        m_tracker.OnFrame(snap, m_resources.Hiveblood(), m_resources.Incursion(),
+                          m_resources.Gold(), &m_kills);
 
         // Atziri beacon gain chime (the one overlay feature deferred to the shell).
         const ResourceReaders::ItState it = m_resources.Incursion();
