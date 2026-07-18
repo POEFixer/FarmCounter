@@ -1,0 +1,9 @@
+bin/
+obj/
+x64/
+.vs/
+*.user
+*.sdf
+*.opensdf
+*.suo
+*.aps
