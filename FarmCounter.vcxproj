@@ -54,7 +54,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExceptionHandling>Sync</ExceptionHandling>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk;$(ProjectDir)imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk;$(ProjectDir)imgui;$(ProjectDir)lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -73,7 +73,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExceptionHandling>Sync</ExceptionHandling>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk;$(ProjectDir)imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk;$(ProjectDir)imgui;$(ProjectDir)lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -82,6 +82,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="FarmCounter.cpp" />
+    <ClCompile Include="src\FarmDb.cpp" />
     <ClCompile Include="src\FarmTracker.cpp" />
     <ClCompile Include="src\IconTextures.cpp" />
     <ClCompile Include="src\KillCounter.cpp" />
@@ -91,6 +92,16 @@
     <ClCompile Include="src\ZoneNames.cpp" />
     <ClCompile Include="src\ui\Overlay.cpp" />
     <ClCompile Include="src\ui\Settings.cpp" />
+    <ClCompile Include="lib\sqlite3.c">
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CompileAsC</CompileAs>
+      <CompileAs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CompileAsC</CompileAs>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">SQLITE_THREADSAFE=1;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">SQLITE_THREADSAFE=1;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">TurnOffAllWarnings</WarningLevel>
+      <WarningLevel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">TurnOffAllWarnings</WarningLevel>
+      <SDLCheck Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</SDLCheck>
+      <SDLCheck Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</SDLCheck>
+    </ClCompile>
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />
     <ClCompile Include="imgui\imgui_tables.cpp" />
@@ -100,12 +111,15 @@
     <ClInclude Include="sdk\PluginAbi.h" />
     <ClInclude Include="sdk\PluginSDK.h" />
     <ClInclude Include="version.h" />
+    <ClInclude Include="lib\sqlite3.h" />
+    <ClInclude Include="lib\sqlite3-vcpkg-config.h" />
+    <ClInclude Include="lib\nlohmann\json.hpp" />
+    <ClInclude Include="src\FarmDb.h" />
     <ClInclude Include="src\FarmTypes.h" />
     <ClInclude Include="src\FarmTracker.h" />
     <ClInclude Include="src\IconTextures.h" />
     <ClInclude Include="src\KillCounter.h" />
     <ClInclude Include="src\LootDiff.h" />
-    <ClInclude Include="src\LootLineParse.h" />
     <ClInclude Include="src\LootScanner.h" />
     <ClInclude Include="src\Persistence.h" />
     <ClInclude Include="src\PriceProvider.h" />

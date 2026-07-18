@@ -24,14 +24,16 @@
 #include "../ZoneNames.h"
 #include "../KillCounter.h"
 #include "../ResourceReaders.h"
+#include "../IconTextures.h"
 #include "../Persistence.h"   // OverlaySettings + SaveSettings/SaveCustomPrices
 #include <filesystem>
 #include <functional>
 
 // Aggregate of everything the settings tabs touch. Pointers are owned by the
 // plugin shell. `settings` / `prices` / `zones` / `kills` are non-const so the
-// tabs can edit + persist them. `dir` is the plugin root directory (Persistence
-// appends config/; ZoneNames writes zone_names.json directly under it).
+// tabs can edit + persist them. `icons` feeds the Statistics tab's item /
+// currency images. `dir` is the plugin root directory (Persistence appends
+// config/; ZoneNames writes zone_names.json directly under it).
 struct SettingsDeps {
     FarmTracker*          tracker   = nullptr;
     PriceProvider*        prices    = nullptr;
@@ -39,6 +41,7 @@ struct SettingsDeps {
     ZoneNames*            zones     = nullptr;
     KillCounter*          kills       = nullptr;
     ResourceReaders*      resources   = nullptr;
+    IconTextures*         icons       = nullptr;
     std::filesystem::path dir;
     std::function<void(float)> onTestSound;  // plays test tone at given volume
 };

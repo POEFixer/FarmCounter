@@ -1,16 +1,17 @@
 #pragma once
 // FarmTracker.h — core model: zone-change state machine, map-run lifecycle,
 // session active-time, loot-diff orchestration (via LootScanner), Hiveblood /
-// Incursion map-gain baselines, and periodic + on-exit persistence. Owns a
-// LootScanner; consumes PriceProvider and ZoneNames; reads the throttled Hb/It
-// states passed into OnFrame. Behavior is a 1:1 port of the old monolith's
-// DrawUI()/ScanInventory()/session logic — see docs §4 "Preserved tracking
-// semantics" and FarmCounter.cpp:669-823, 1615-1776.
+// beacon map-gain baselines, per-run kill tally, Escape-pause handling and
+// SQLite persistence (FarmDb). Owns a LootScanner + FarmDb; consumes
+// PriceProvider, ZoneNames and KillCounter; reads the throttled Hb/It states
+// passed into OnFrame.
 #include "sdk/PluginSDK.h"
 #include "FarmTypes.h"
+#include "FarmDb.h"
 #include "LootScanner.h"
 #include "PriceProvider.h"
 #include "ZoneNames.h"
+#include "KillCounter.h"
 #include "ResourceReaders.h"
 #include <filesystem>
 #include <vector>
@@ -28,13 +29,22 @@ public:
     void OnDisable();
     void OnFrame(const PluginSDK::Snapshot& snap,
                  const ResourceReaders::HbState& hb,
-                 const ResourceReaders::ItState& it);
+                 const ResourceReaders::ItState& it,
+                 const KillCounter* kills);
+
+    // Escape-menu pause: while paused all wall-clock anchors are frozen; on
+    // resume every anchor shifts forward by the pause duration, so map timers
+    // and session active-time exclude time spent in the Esc menu (the game is
+    // actually paused there in solo play). Called by the shell every frame.
+    void SetPaused(bool paused);
+    bool IsPaused() const { return m_Paused; }
 
     // ── State getters (overlay / settings) ──────────────────────────────────
     bool InMap()          const { return m_InMap; }
     bool BaselineReady()  const { return m_BaselineReady; }
     bool SessionRunning() const { return m_SessionTimerRunning; }
-    int  SessionActiveSec() const;  // live total = accumulator + current running interval
+    int  SessionActiveSec() const;  // live total = accumulator + running interval (pause-honest)
+    int  CurrentMapSec()    const;  // current visit elapsed (pause-honest)
     Clock::time_point SessionStart()   const { return m_SessionActiveStart; }
     Clock::time_point ZoneEnterTime()  const { return m_ZoneEnterTime; }
     const std::string& CurrentZone()   const { return m_CurrentZone; }
@@ -44,6 +54,8 @@ public:
     const std::vector<MapRun>& Runs() const { return m_MapRuns; }
     const std::unordered_map<std::string, InvSnapshot>& LastSnapshot() const { return m_LastCurrentSnap; }
     int  CurrentSessionId() const { return m_CurrentSessionId; }
+    int  ActiveRunIndex()   const { return m_ActiveRunIdx; }   // -1 = none (live run is not deletable)
+    bool DbOpen()           const { return m_db.IsOpen(); }
 
     // Resource display getters
     bool    HbHasBaseline() const { return m_HbHasBaseline; }
@@ -51,8 +63,11 @@ public:
     bool    ItHasBaseline() const { return m_ItHasBaseline; }
     int     ItBaseline()    const { return m_ItBaseline; }
 
-    // ── Ops ──────────────────────────────────────────────────────────────────
+    // ── Ops (Statistics tab) ────────────────────────────────────────────────
     void NewSession();
+    void DeleteRunAt(int idx);          // any non-active run (DB + memory)
+    void DeleteArchivedSession(int sessionId);
+    void DeleteAllArchived();
 
 private:
     void ScanInventory();
@@ -60,7 +75,8 @@ private:
     void UpdateLiveRun();
     void FinalizeMapRun();
     void DiscardLiveRun();
-    void Save();  // SaveMapHistory(m_dir, runs, live-active-sec)
+    void AccumulateKills(const KillCounter* kills);
+    void Save();  // live-run row + session meta
 
     // Dependencies
     const PluginSDK::Context* m_ctx     = nullptr;
@@ -68,6 +84,7 @@ private:
     ZoneNames*                m_zoneNames = nullptr;
     std::filesystem::path     m_dir;
     LootScanner               m_scanner;
+    FarmDb                    m_db;
 
     // Zone / loot state
     std::string       m_CurrentAreaHash;
@@ -90,14 +107,23 @@ private:
     bool m_IsResume               = false; // skip the 1500ms settle when re-entering the same map
     bool m_WasInPassThrough       = false; // was in Abyss/sub-zone, returning to same map
 
+    // Escape-menu pause
+    bool              m_Paused = false;
+    Clock::time_point m_PauseStart{};
+
     // Session active-time (pauses after >60s continuously in hideout)
     int               m_SessionActiveSec    = 0;
     Clock::time_point m_SessionActiveStart{};
     bool              m_SessionTimerRunning = false;
     int               m_CurrentSessionId    = 0;
 
-    // Map run history (persisted to config/map_history.txt)
+    // Map run history (persisted to data/farmstats.db via FarmDb)
     std::vector<MapRun> m_MapRuns;
+
+    // Per-area kill counters reset on every area change; the tracker folds their
+    // per-frame deltas into the active run so a run's tally survives sub-zones
+    // and hideout round-trips.
+    int m_KillsLastNormal = 0, m_KillsLastMagic = 0, m_KillsLastRare = 0, m_KillsLastUnique = 0;
 
     // Hiveblood map-gain baseline (+ carryover across hideout round-trips)
     int32_t m_HbBaseline    = 0;
@@ -107,9 +133,11 @@ private:
     int32_t m_HbCarryoverBaseline    = 0;
     bool    m_HbCarryoverHasBaseline = false;
 
-    // Incursion-token map-gain baseline (+ carryover)
+    // Beacon (Atziri) map-gain baseline (+ carryover), cached last-good reading
     int  m_ItBaseline    = 0;
     bool m_ItHasBaseline = false;
+    int  m_ItCachedCur   = 0;
+    bool m_ItHasCached   = false;
     int  m_ItCarryoverBaseline    = 0;
     bool m_ItCarryoverHasBaseline = false;
 };

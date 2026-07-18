@@ -1,65 +1,23 @@
 #include "ZoneNames.h"
+#include <nlohmann/json.hpp>
 #include <fstream>
-#include <algorithm>
-#include <vector>
+#include <string>
+#include <system_error>
 
 namespace fs = std::filesystem;
-
-namespace {
-
-// Minimal JSON string escaping for the hand-rolled zone_names.json format:
-// display names come from a free-text InputText, so quotes/backslashes must not
-// corrupt the file.
-std::string JsonEscape(const std::string& s) {
-    std::string r;
-    r.reserve(s.size());
-    for (char c : s) {
-        if (c == '\\')      r += "\\\\";
-        else if (c == '"')  r += "\\\"";
-        else if ((unsigned char)c < 0x20) r += ' ';  // control chars -> space
-        else r += c;
-    }
-    return r;
-}
-
-// Parses a double-quoted string starting at `from` (which must point at the
-// opening '"'), honoring \" and \\ escapes. Returns false on malformed input;
-// on success `out` holds the unescaped value and `next` the index PAST the
-// closing quote.
-bool ParseQuoted(const std::string& line, size_t from, std::string& out, size_t& next) {
-    if (from >= line.size() || line[from] != '"') return false;
-    out.clear();
-    for (size_t i = from + 1; i < line.size(); i++) {
-        char c = line[i];
-        if (c == '\\' && i + 1 < line.size()) { out += line[++i]; continue; }
-        if (c == '"') { next = i + 1; return true; }
-        out += c;
-    }
-    return false;
-}
-
-} // namespace
+using nlohmann::json;
 
 void ZoneNames::Load(const fs::path& dir) {
     fs::path p = dir / "zone_names.json";
     if (!fs::exists(p)) return;
     std::ifstream f(p);
     if (!f.is_open()) return;
+    json j = json::parse(f, nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded() || !j.is_object()) return;
     m_names.clear();
-    std::string line;
-    while (std::getline(f, line)) {
-        // Expected shape per line:  "key": "value"[,]
-        size_t q = line.find('"');
-        if (q == std::string::npos) continue;
-        std::string key, val;
-        size_t after = 0;
-        if (!ParseQuoted(line, q, key, after) || key.empty()) continue;
-        size_t colon = line.find(':', after);
-        if (colon == std::string::npos) continue;
-        size_t vq = line.find('"', colon);
-        if (vq != std::string::npos) ParseQuoted(line, vq, val, after);
-        m_names[key] = val;
-    }
+    for (auto it = j.begin(); it != j.end(); ++it)
+        if (it.value().is_string() && !it.key().empty())
+            m_names[it.key()] = it.value().get<std::string>();
 }
 
 void ZoneNames::Save(const fs::path& dir) const {
@@ -68,18 +26,15 @@ void ZoneNames::Save(const fs::path& dir) const {
     fs::path tmp = target;
     tmp += ".tmp";
     {
-        std::ofstream f(tmp);
+        std::ofstream f(tmp, std::ios::binary);
         if (!f.is_open()) return;
-        std::vector<std::pair<std::string, std::string>> sorted(m_names.begin(), m_names.end());
-        std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b){ return a.first < b.first; });
-        f << "{\n";
-        bool first = true;
-        for (const auto& kv : sorted) {
-            if (!first) f << ",\n";
-            first = false;
-            f << "    \"" << JsonEscape(kv.first) << "\": \"" << JsonEscape(kv.second) << "\"";
-        }
-        f << "\n}\n";
+        // nlohmann keeps object keys sorted — stable, diff-friendly output.
+        // error_handler replace: raw zone names come from game memory; a stray
+        // invalid-UTF-8 byte must never throw inside the host's ImGui frame.
+        json j = json::object();
+        for (const auto& kv : m_names) j[kv.first] = kv.second;
+        const std::string out = j.dump(4, ' ', false, json::error_handler_t::replace) + "\n";
+        f.write(out.data(), (std::streamsize)out.size());
     }
     std::error_code ec;
     fs::rename(tmp, target, ec);

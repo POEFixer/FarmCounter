@@ -1,72 +1,41 @@
 #include "Persistence.h"
 #include "PriceProvider.h"
-#include "LootLineParse.h" // FormatLootLine / ParseLootLine (also pulls in FarmTypes.h)
+#include <nlohmann/json.hpp>
+#include <algorithm>
 #include <fstream>
 #include <string>
-#include <algorithm>
 #include <system_error>
 
 namespace fs = std::filesystem;
+using nlohmann::json;
 
-// Atomic replace: the stream wrote <target>.tmp; rename it over the target so a
-// crash mid-write can never leave a truncated file (map_history.txt is the
-// plugin's only store and is rewritten every 15s).
-static void CommitTmp(const fs::path& target) {
+namespace {
+
+// Atomic replace: write <target>.tmp, then rename over the target so a crash
+// mid-write can never leave a truncated file.
+void WriteAtomic(const fs::path& target, const std::string& content) {
     fs::path tmp = target;
     tmp += ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary);
+        if (!f.is_open()) return;
+        f.write(content.data(), (std::streamsize)content.size());
+    }
     std::error_code ec;
     fs::rename(tmp, target, ec);   // replaces an existing target on Windows
     if (ec) fs::remove(tmp, ec);   // failed swap: don't leave the orphan behind
 }
 
-static fs::path TmpOf(const fs::path& target) {
-    fs::path tmp = target;
-    tmp += ".tmp";
-    return tmp;
-}
+// Type-checked json getters — nlohmann's value() throws on a type mismatch, and
+// config files are user-editable, so never trust the stored type.
+bool  GetB(const json& j, const char* k, bool  def) { auto it = j.find(k); return (it != j.end() && it->is_boolean())        ? it->get<bool>()  : def; }
+int   GetI(const json& j, const char* k, int   def) { auto it = j.find(k); return (it != j.end() && it->is_number())         ? (int)it->get<double>() : def; }
+float GetF(const json& j, const char* k, float def) { auto it = j.find(k); return (it != j.end() && it->is_number())         ? (float)it->get<double>() : def; }
+std::string GetS(const json& j, const char* k)      { auto it = j.find(k); return (it != j.end() && it->is_string())         ? it->get<std::string>() : std::string(); }
 
-// ── Settings (config/settings.txt) ──────────────────────────────────────────
+// ── Legacy .txt fallbacks (read-only; kept so an update preserves configs) ───
 
-void SaveSettings(const fs::path& dir, const OverlaySettings& s) {
-    fs::path cfg = dir / "config";
-    std::error_code ec;
-    fs::create_directories(cfg, ec);
-    const fs::path target = cfg / "settings.txt";
-    std::ofstream f(TmpOf(target));
-    if (!f.is_open()) return;
-    f << "WantsOverlay="      << (s.wantsOverlay      ? 1 : 0) << "\n";
-    f << "ShowItems="         << (s.showItems         ? 1 : 0) << "\n";
-    f << "ShowUnpriced="      << (s.showUnpriced      ? 1 : 0) << "\n";
-    f << "ShowProfitPerHour=" << (s.showProfitPerHour ? 1 : 0) << "\n";
-    f << "OverlayCurrency="   << s.overlayCurrency             << "\n";
-    f << "WindowAlpha="       << s.windowAlpha                 << "\n";
-    f << "WindowPosX="        << s.windowPosX                  << "\n";
-    f << "WindowPosY="        << s.windowPosY                  << "\n";
-    f << "ItShow="            << (s.itShow     ? 1 : 0)        << "\n";
-    f << "ItSound="           << (s.itSound    ? 1 : 0)        << "\n";
-    f << "ItVolume="          << s.itVolume                    << "\n";
-    f << "ItInMain="          << (s.itInMain   ? 1 : 0)        << "\n";
-    f << "ItSeparate="        << (s.itSeparate ? 1 : 0)        << "\n";
-    f << "HbInMain="          << (s.hbInMain   ? 1 : 0)        << "\n";
-    f << "HbShow="            << (s.hbShow     ? 1 : 0)        << "\n";
-    f << "ItOverlayX="        << s.itOverlayX                  << "\n";
-    f << "ItOverlayY="        << s.itOverlayY                  << "\n";
-    // Per-rarity kill display + Hiveblood near-cap flash (new keys; persisted).
-    f << "KcShow="            << (s.kcShow         ? 1 : 0)    << "\n";
-    f << "KcShowNormal="      << (s.kcShowNormal   ? 1 : 0)    << "\n";
-    f << "KcShowMagic="       << (s.kcShowMagic    ? 1 : 0)    << "\n";
-    f << "KcShowRare="        << (s.kcShowRare     ? 1 : 0)    << "\n";
-    f << "KcShowUnique="      << (s.kcShowUnique   ? 1 : 0)    << "\n";
-    f << "HbWarnNearCap="     << (s.hbWarnNearCap  ? 1 : 0)    << "\n";
-    f << "HbWarnThreshold="   << s.hbWarnThreshold             << "\n";
-    f << "HbShowMapGains="    << (s.hbShowMapGains ? 1 : 0)    << "\n";
-    f.close();
-    CommitTmp(target);
-}
-
-void LoadSettings(const fs::path& dir, OverlaySettings& out) {
-    fs::path p = dir / "config" / "settings.txt";
-    if (!fs::exists(p)) return;
+void LoadSettingsLegacy(const fs::path& p, OverlaySettings& out) {
     std::ifstream f(p);
     if (!f.is_open()) return;
     std::string line;
@@ -100,124 +69,11 @@ void LoadSettings(const fs::path& dir, OverlaySettings& out) {
         else if (key == "HbWarnNearCap")     out.hbWarnNearCap  = (val == "1");
         else if (key == "HbWarnThreshold")   { try { out.hbWarnThreshold = std::clamp(std::stoi(val), 50000, 100000); } catch (...) {} }
         else if (key == "HbShowMapGains")    out.hbShowMapGains = (val == "1");
-        // Unknown keys are ignored (incl. legacy League= / RefreshIntervalMin= —
-        // the core app owns league + refresh interval now).
+        // Unknown keys are ignored (incl. legacy League= / RefreshIntervalMin=).
     }
 }
 
-// ── Map history (config/map_history.txt) ────────────────────────────────────
-//
-// Format:
-//   session_active_sec=<seconds>
-//   [per run:]
-//     map=<EscapeField(name)>
-//     dur=<seconds>
-//     chaos=<float>
-//     exrate=<float>
-//     archived=<0|1>
-//     session=<id>
-//     [if hivebloodGain>0] hiveblood=<int>
-//     [per loot:] loot=<FormatLootLine(e)>
-//     ---
-
-void SaveMapHistory(const fs::path& dir, const std::vector<MapRun>& runs, int sessionActiveSec) {
-    fs::path cfg = dir / "config";
-    std::error_code ec;
-    fs::create_directories(cfg, ec);
-    const fs::path target = cfg / "map_history.txt";
-    std::ofstream f(TmpOf(target));
-    if (!f.is_open()) return;
-    f << "session_active_sec=" << sessionActiveSec << "\n";
-    for (const auto& r : runs) {
-        f << "map="      << EscapeField(r.mapName) << "\n";
-        f << "dur="      << r.durationSec          << "\n";
-        f << "chaos="    << r.totalChaos           << "\n";
-        f << "exrate="   << r.exaltedRate          << "\n";
-        f << "archived=" << (r.archived ? 1 : 0)   << "\n";
-        f << "session="  << r.sessionId            << "\n";
-        if (r.hivebloodGain > 0)
-            f << "hiveblood=" << r.hivebloodGain << "\n";
-        for (const auto& e : r.loot)
-            f << "loot=" << FormatLootLine(e) << "\n";
-        f << "---\n";
-    }
-    f.close();
-    CommitTmp(target);
-}
-
-void LoadMapHistory(const fs::path& dir, std::vector<MapRun>& runs,
-                    int& sessionActiveSec, int& sessionIdMax) {
-    fs::path p = dir / "config" / "map_history.txt";
-    if (!fs::exists(p)) return;
-    std::ifstream f(p);
-    if (!f.is_open()) return;
-    runs.clear();
-    sessionActiveSec = 0; // reset from file; absent line ⇒ 0 (matches old loader)
-    MapRun cur;
-    bool inRun = false;
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line == "---") {
-            if (inRun && !cur.mapName.empty()) runs.push_back(cur);
-            cur = MapRun{};
-            inRun = false;
-            continue;
-        }
-        auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
-        if (key == "session_active_sec") {
-            try { sessionActiveSec = std::stoi(val); } catch (...) {}
-            continue;
-        }
-        inRun = true;
-        if      (key == "map")       { cur.mapName = UnescapeField(val); }
-        else if (key == "dur")       { try { cur.durationSec   = std::stoi(val); } catch (...) {} }
-        else if (key == "chaos")     { try { cur.totalChaos    = std::stof(val); } catch (...) {} }
-        else if (key == "exrate")    { try { cur.exaltedRate   = std::stof(val); } catch (...) {} }
-        else if (key == "archived")  { cur.archived = (val == "1"); }
-        else if (key == "session")   { try { cur.sessionId     = std::stoi(val); } catch (...) {} }
-        else if (key == "hiveblood") { try { cur.hivebloodGain = std::stoi(val); } catch (...) {} }
-        else if (key == "loot")      { LootEntry e; if (ParseLootLine(val, e)) cur.loot.push_back(e); }
-    }
-    // Trailing run with no closing "---".
-    if (inRun && !cur.mapName.empty()) runs.push_back(cur);
-    // Raise the session-id high-water mark (never lowered).
-    for (const auto& r : runs)
-        if (r.sessionId > sessionIdMax) sessionIdMax = r.sessionId;
-}
-
-// ── Custom prices (config/custom_prices.txt) ────────────────────────────────
-//
-// Line format: <displayName>|<baseType>=<chaos>
-
-void SaveCustomPrices(const fs::path& dir, const PriceProvider& pp) {
-    fs::path cfg = dir / "config";
-    std::error_code ec;
-    fs::create_directories(cfg, ec);
-    const fs::path target = cfg / "custom_prices.txt";
-    std::ofstream f(TmpOf(target));
-    if (!f.is_open()) return;
-    // PriceProvider's map accessors are non-const; we only read through them here.
-    PriceProvider& m = const_cast<PriceProvider&>(pp);
-    const auto& custom = m.Custom();
-    const auto& names  = m.CustomNames();
-    const auto& bases  = m.CustomBase();
-    for (const auto& [key, chaos] : custom) {
-        auto itN = names.find(key);
-        auto itB = bases.find(key);
-        const std::string& uname = (itN != names.end()) ? itN->second : key;
-        std::string        bname = (itB != bases.end()) ? itB->second : std::string();
-        f << uname << "|" << bname << "=" << chaos << "\n";
-    }
-    f.close();
-    CommitTmp(target);
-}
-
-void LoadCustomPrices(const fs::path& dir, PriceProvider& pp) {
-    fs::path p = dir / "config" / "custom_prices.txt";
-    if (!fs::exists(p)) return;
+void LoadCustomPricesLegacy(const fs::path& p, PriceProvider& pp) {
     std::ifstream f(p);
     if (!f.is_open()) return;
     auto& custom = pp.Custom();
@@ -234,15 +90,142 @@ void LoadCustomPrices(const fs::path& dir, PriceProvider& pp) {
         std::string bname = (pipe != std::string::npos) ? namepart.substr(pipe + 1) : std::string();
         if (uname.empty()) continue;
         try {
-            float chaos = std::stof(val);
-            if (chaos > 0.0f) {
-                // CRITICAL: key by PriceProvider::ToLower(name) — PriceProvider::Lookup
-                // probes the custom map with ToLower(name), so any other key never matches.
-                std::string key = PriceProvider::ToLower(uname);
-                custom[key] = chaos;
+            float exalts = std::stof(val);
+            if (exalts > 0.0f) {
+                const std::string key = PriceProvider::ToLower(uname);
+                custom[key] = exalts;
                 names[key]  = uname;
                 bases[key]  = bname;
             }
         } catch (...) {}
     }
+}
+
+} // namespace
+
+// ── Settings (config/settings.json) ─────────────────────────────────────────
+
+void SaveSettings(const fs::path& dir, const OverlaySettings& s) {
+    fs::path cfg = dir / "config";
+    std::error_code ec;
+    fs::create_directories(cfg, ec);
+    json j;
+    j["wantsOverlay"]      = s.wantsOverlay;
+    j["showItems"]         = s.showItems;
+    j["showUnpriced"]      = s.showUnpriced;
+    j["showProfitPerHour"] = s.showProfitPerHour;
+    j["overlayCurrency"]   = s.overlayCurrency;
+    j["windowAlpha"]       = s.windowAlpha;
+    j["windowPosX"]        = s.windowPosX;
+    j["windowPosY"]        = s.windowPosY;
+    j["itShow"]            = s.itShow;
+    j["itSound"]           = s.itSound;
+    j["itVolume"]          = s.itVolume;
+    j["itInMain"]          = s.itInMain;
+    j["itSeparate"]        = s.itSeparate;
+    j["itOverlayX"]        = s.itOverlayX;
+    j["itOverlayY"]        = s.itOverlayY;
+    j["hbInMain"]          = s.hbInMain;
+    j["hbShow"]            = s.hbShow;
+    j["kcShow"]            = s.kcShow;
+    j["kcShowNormal"]      = s.kcShowNormal;
+    j["kcShowMagic"]       = s.kcShowMagic;
+    j["kcShowRare"]        = s.kcShowRare;
+    j["kcShowUnique"]      = s.kcShowUnique;
+    j["hbWarnNearCap"]     = s.hbWarnNearCap;
+    j["hbWarnThreshold"]   = s.hbWarnThreshold;
+    j["hbShowMapGains"]    = s.hbShowMapGains;
+    // error_handler replace: a stray invalid-UTF-8 byte must never throw here —
+    // this runs inside the host's ImGui frame (a throw corrupts host UI state).
+    WriteAtomic(cfg / "settings.json",
+                j.dump(4, ' ', false, json::error_handler_t::replace) + "\n");
+}
+
+void LoadSettings(const fs::path& dir, OverlaySettings& out) {
+    const fs::path jsonPath = dir / "config" / "settings.json";
+    if (fs::exists(jsonPath)) {
+        std::ifstream f(jsonPath);
+        if (!f.is_open()) return;
+        json j = json::parse(f, nullptr, /*allow_exceptions=*/false);
+        if (j.is_discarded() || !j.is_object()) return;
+        out.wantsOverlay      = GetB(j, "wantsOverlay",      out.wantsOverlay);
+        out.showItems         = GetB(j, "showItems",         out.showItems);
+        out.showUnpriced      = GetB(j, "showUnpriced",      out.showUnpriced);
+        out.showProfitPerHour = GetB(j, "showProfitPerHour", out.showProfitPerHour);
+        out.overlayCurrency   = std::clamp(GetI(j, "overlayCurrency", out.overlayCurrency), 0, 2);
+        out.windowAlpha       = GetF(j, "windowAlpha",       out.windowAlpha);
+        out.windowPosX        = GetF(j, "windowPosX",        out.windowPosX);
+        out.windowPosY        = GetF(j, "windowPosY",        out.windowPosY);
+        out.itShow            = GetB(j, "itShow",            out.itShow);
+        out.itSound           = GetB(j, "itSound",           out.itSound);
+        out.itVolume          = std::clamp(GetF(j, "itVolume", out.itVolume), 0.f, 1.f);
+        out.itInMain          = GetB(j, "itInMain",          out.itInMain);
+        out.itSeparate        = GetB(j, "itSeparate",        out.itSeparate);
+        out.itOverlayX        = GetF(j, "itOverlayX",        out.itOverlayX);
+        out.itOverlayY        = GetF(j, "itOverlayY",        out.itOverlayY);
+        out.hbInMain          = GetB(j, "hbInMain",          out.hbInMain);
+        out.hbShow            = GetB(j, "hbShow",            out.hbShow);
+        out.kcShow            = GetB(j, "kcShow",            out.kcShow);
+        out.kcShowNormal      = GetB(j, "kcShowNormal",      out.kcShowNormal);
+        out.kcShowMagic       = GetB(j, "kcShowMagic",       out.kcShowMagic);
+        out.kcShowRare        = GetB(j, "kcShowRare",        out.kcShowRare);
+        out.kcShowUnique      = GetB(j, "kcShowUnique",      out.kcShowUnique);
+        out.hbWarnNearCap     = GetB(j, "hbWarnNearCap",     out.hbWarnNearCap);
+        out.hbWarnThreshold   = std::clamp(GetI(j, "hbWarnThreshold", out.hbWarnThreshold), 50000, 100000);
+        out.hbShowMapGains    = GetB(j, "hbShowMapGains",    out.hbShowMapGains);
+        return;
+    }
+    // One-time legacy fallback: pre-JSON installs keep their configuration (the
+    // next SaveSettings writes settings.json and the .txt is never read again).
+    LoadSettingsLegacy(dir / "config" / "settings.txt", out);
+}
+
+// ── Custom prices (config/custom_prices.json) ───────────────────────────────
+//
+// Array of { "name": display name, "base": base type ("" for non-unique),
+//            "exalts": price in exalted orbs }.
+
+void SaveCustomPrices(const fs::path& dir, const PriceProvider& pp) {
+    fs::path cfg = dir / "config";
+    std::error_code ec;
+    fs::create_directories(cfg, ec);
+    // PriceProvider's map accessors are non-const; we only read through them here.
+    PriceProvider& m = const_cast<PriceProvider&>(pp);
+    json arr = json::array();
+    for (const auto& [key, exalts] : m.Custom()) {
+        auto itN = m.CustomNames().find(key);
+        auto itB = m.CustomBase().find(key);
+        json e;
+        e["name"]   = (itN != m.CustomNames().end()) ? itN->second : key;
+        e["base"]   = (itB != m.CustomBase().end())  ? itB->second : std::string();
+        e["exalts"] = exalts;
+        arr.push_back(std::move(e));
+    }
+    // error_handler replace: see SaveSettings — never throw inside the frame.
+    WriteAtomic(cfg / "custom_prices.json",
+                arr.dump(4, ' ', false, json::error_handler_t::replace) + "\n");
+}
+
+void LoadCustomPrices(const fs::path& dir, PriceProvider& pp) {
+    const fs::path jsonPath = dir / "config" / "custom_prices.json";
+    if (fs::exists(jsonPath)) {
+        std::ifstream f(jsonPath);
+        if (!f.is_open()) return;
+        json arr = json::parse(f, nullptr, /*allow_exceptions=*/false);
+        if (arr.is_discarded() || !arr.is_array()) return;
+        for (const auto& e : arr) {
+            if (!e.is_object()) continue;
+            const std::string name = GetS(e, "name");
+            const float exalts     = GetF(e, "exalts", 0.f);
+            if (name.empty() || exalts <= 0.f) continue;
+            // CRITICAL: key by PriceProvider::ToLower(name) — Lookup probes the
+            // custom map with ToLower(name), so any other key never matches.
+            const std::string key = PriceProvider::ToLower(name);
+            pp.Custom()[key]      = exalts;
+            pp.CustomNames()[key] = name;
+            pp.CustomBase()[key]  = GetS(e, "base");
+        }
+        return;
+    }
+    LoadCustomPricesLegacy(dir / "config" / "custom_prices.txt", pp);
 }

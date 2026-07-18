@@ -1,5 +1,7 @@
 #pragma once
-// FarmTypes.h — pure POD types + field (de)serialization. std-only (no Windows/ImGui/SDK).
+// FarmTypes.h — pure POD types shared across the plugin. std-only (no
+// Windows/ImGui/SDK). Persisted by FarmDb (SQLite) — see FarmDb.h.
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -8,18 +10,28 @@ struct LootEntry {
     int         stackCount = 0;
     float       chaosEach  = 0.0f;
     int         rarity     = 0;
-    std::string iconPath;        // scan-time-resolved icon path (not persisted to map_history)
+    std::string iconPath;        // scan-time-resolved local PNG path (persisted for history icons)
 };
 
 struct MapRun {
+    int64_t                dbId          = 0;    // sqlite rowid; 0 = not inserted yet
     std::string            mapName;
-    int                    durationSec   = 0;
+    int64_t                startedAt     = 0;    // unix seconds
+    std::string            startedText;          // "YYYY-MM-DD HH:MM" local time
+    int                    durationSec   = 0;    // pause-honest active time
     float                  totalChaos    = 0.0f;
     float                  exaltedRate   = 1.0f;
     std::vector<LootEntry> loot;
     bool                   archived      = false;
     int                    sessionId     = 0;
     int                    hivebloodGain = 0;
+    int                    beaconGain    = 0;    // Atziri beacons gained this run
+    int                    killsNormal   = 0;    // per-run kill tally (accumulated
+    int                    killsMagic    = 0;    // across the run's areas/visits)
+    int                    killsRare     = 0;
+    int                    killsUnique   = 0;
+
+    int KillsTotal() const { return killsNormal + killsMagic + killsRare + killsUnique; }
 };
 
 struct InvSnapshot {
@@ -31,17 +43,3 @@ struct InvSnapshot {
     int         rarity     = 0;
     std::string iconPath;        // scan-time-resolved icon path (carried onto LootEntry by DiffLoot)
 };
-
-// Escape '\' and '|' so a name can be stored in a '|'-delimited field.
-inline std::string EscapeField(const std::string& s) {
-    std::string r; r.reserve(s.size());
-    for (char c : s) { if (c == '\\') r += "\\\\"; else if (c == '|') r += "\\|"; else r += c; }
-    return r;
-}
-inline std::string UnescapeField(const std::string& s) {
-    std::string r; r.reserve(s.size());
-    for (size_t i = 0; i < s.size(); i++) {
-        if (s[i] == '\\' && i + 1 < s.size()) { r += s[++i]; } else r += s[i];
-    }
-    return r;
-}

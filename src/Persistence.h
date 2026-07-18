@@ -1,22 +1,16 @@
 #pragma once
-// Persistence.h — FarmCounter disk I/O for overlay settings, map-run history and
-// custom prices. Every file lives under <dir>/config/. This header is deliberately
-// std-only (no ImGui, no Windows, no SDK): overlay window/overlay positions are plain
-// floats so the settings struct carries no ImGui dependency.
-#include "FarmTypes.h"
+// Persistence.h — FarmCounter disk I/O for overlay settings and custom prices.
+// Both live under <dir>/config/ as JSON (settings.json / custom_prices.json),
+// written atomically (tmp + rename). Loaders fall back to the legacy .txt
+// formats once, so an upgrade keeps the user's existing configuration.
+// Map-run statistics are NOT here anymore — they live in SQLite (FarmDb.h).
+// This header is deliberately std-only (no ImGui, no Windows, no SDK).
 #include <filesystem>
 #include <string>
-#include <vector>
 
 class PriceProvider; // defined in PriceProvider.h (included by Persistence.cpp)
 
-// Overlay / UI settings persisted to config/settings.txt.
-//
-// This field set round-trips every key the old monolith's SaveSettings/LoadSettings
-// handled, EXCEPT League and RefreshIntervalMin which are intentionally dropped (the
-// core owns league + refresh interval now). The two "*InMain" fields back legacy keys
-// that the old loader still parsed; they are persisted for round-trip fidelity even
-// though they drive no overlay logic.
+// Overlay / UI settings persisted to config/settings.json.
 struct OverlaySettings {
     bool  wantsOverlay      = false;
     bool  showItems         = true;
@@ -29,15 +23,12 @@ struct OverlaySettings {
     bool  itShow            = true;
     bool  itSound           = true;
     float itVolume          = 0.5f;
-    bool  itInMain          = false; // legacy key "ItInMain" (round-tripped; no live logic)
+    bool  itInMain          = false; // legacy key (round-tripped; no live logic)
     bool  itSeparate        = false;
     float itOverlayX        = -1.0f;
     float itOverlayY        = -1.0f;
-    bool  hbInMain          = false; // legacy key "HbInMain" (round-tripped; no live logic)
+    bool  hbInMain          = false; // legacy key (round-tripped; no live logic)
     bool  hbShow            = true;  // "Show Hiveblood in overlay"
-    // Per-rarity kill display + Hiveblood near-cap flash. These mirror the old
-    // monolith's runtime-only members; now PERSISTED (intended improvement). Old
-    // settings files lacking these keys keep the defaults below.
     bool  kcShow            = true;  // master toggle for the kills element
     bool  kcShowNormal      = true;
     bool  kcShowMagic       = true;
@@ -48,19 +39,12 @@ struct OverlaySettings {
     bool  hbShowMapGains    = true;  // show the Hiveblood "(+N)" per-map gain label
 };
 
-// config/settings.txt. LoadSettings ignores unknown keys, so an old file that still
-// carries League= / RefreshIntervalMin= loads cleanly.
+// config/settings.json (fallback: legacy config/settings.txt).
 void LoadSettings(const std::filesystem::path& dir, OverlaySettings& out);
 void SaveSettings(const std::filesystem::path& dir, const OverlaySettings& s);
 
-// config/map_history.txt. sessionActiveSec is reset from the file (out); sessionIdMax is
-// only ever raised to the highest sessionId seen (in/out high-water mark).
-void LoadMapHistory(const std::filesystem::path& dir, std::vector<MapRun>& runs,
-                    int& sessionActiveSec, int& sessionIdMax);
-void SaveMapHistory(const std::filesystem::path& dir, const std::vector<MapRun>& runs,
-                    int sessionActiveSec);
-
-// config/custom_prices.txt. The PriceProvider custom maps are keyed by
-// PriceProvider::ToLower(name) so PriceProvider::Lookup (which probes with ToLower) finds them.
+// config/custom_prices.json (fallback: legacy config/custom_prices.txt). The
+// PriceProvider custom maps are keyed by PriceProvider::ToLower(name) so
+// PriceProvider::Lookup (which probes with ToLower) finds them.
 void LoadCustomPrices(const std::filesystem::path& dir, PriceProvider& pp);
 void SaveCustomPrices(const std::filesystem::path& dir, const PriceProvider& pp);

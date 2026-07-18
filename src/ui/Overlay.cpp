@@ -253,11 +253,8 @@ void RenderOverlay(const OverlayDeps& d) {
                   : (tr.MapZoneName().empty() ? disp(tr.CurrentZone()) : disp(tr.MapZoneName()));
         if (zoneDisp.empty()) zoneDisp = "Unknown Zone";
 
-        long long mapSec = inMap
-            ? std::chrono::duration_cast<std::chrono::seconds>(
-                  std::chrono::steady_clock::now() - tr.ZoneEnterTime()).count()
-            : 0LL;
-        int mmm = (int)(mapSec / 60), mss = (int)(mapSec % 60);
+        const int mapSec = tr.CurrentMapSec();   // pause-honest (Esc menu excluded)
+        int mmm = mapSec / 60, mss = mapSec % 60;
 
         const float padX = 6.f, padY = 3.f;
         ImVec2 winPos  = ImGui::GetWindowPos();

@@ -15,9 +15,14 @@ and keeps a persistent per-map / per-session history.
   service (poe2scout DB, league configured in POEFixer Settings). The plugin
   itself performs **no HTTP**. Items the DB misses can be given **custom
   prices** (stored in exalts) from the settings tab.
-- **Map-run history & sessions** — per-run duration, total value, loot list;
-  archive everything into numbered sessions with top-drops summaries and
-  profit/hour. Survives restarts (`config/map_history.txt`).
+- **Map-run history & sessions in SQLite** — per-run date, duration, value,
+  loot (with icons), kills by rarity, Hiveblood/beacon gains; archive everything
+  into numbered sessions with top-drop summaries, profit/hour and an all-time
+  block (total maps, farm time, value, best run). Old runs and whole sessions
+  can be deleted right from the Statistics tab (inline two-click confirm).
+  Stored in `data/farmstats.db` — survives restarts.
+- **True pause** — while the game is paused in the Esc menu, the map timer and
+  session active-time freeze too.
 - **Hideout round-trips handled** — leaving a map suspends the run; coming
   back to the same instance resumes it, carrying loot, duration and resource
   baselines over.
@@ -50,15 +55,17 @@ The DLL is written to `bin\Release\FarmCounter.dll`.
 ## Install
 
 Copy `FarmCounter.dll` into `Plugins\FarmCounter\` next to your POEFixer
-executable and enable the plugin in the Plugins tab. Settings and history
-are stored in `Plugins\FarmCounter\config\`.
+executable and enable the plugin in the Plugins tab. Settings live in
+`Plugins\FarmCounter\config\` (JSON); statistics in
+`Plugins\FarmCounter\data\farmstats.db` (SQLite).
 
 ## Repository Layout
 
 ```
-FarmCounter.cpp     — plugin shell (lifecycle, chime, module wiring)
-src/                — tracker, loot scanner/diff, prices, resources, persistence
+FarmCounter.cpp     — plugin shell (lifecycle, pause, chime, module wiring)
+src/                — tracker, loot scanner/diff, prices, resources, SQLite store
 src/ui/             — overlay + settings tabs (ImGui)
+lib/                — vendored sqlite3 amalgamation + nlohmann/json
 sdk/                — POEFixer Plugin SDK v6 headers (synced from the main repo)
 imgui/              — Dear ImGui sources the DLL compiles against
 ```

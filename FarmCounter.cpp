@@ -118,13 +118,18 @@ public:
             ImGui::SetCurrentContext(static_cast<ImGuiContext*>(ctx()->ImGuiContext));
 
         auto snap = ctx()->Game.GetSnapshot();
-        if (!snap.IsAttached || snap.State != PluginSDK::GameState::InGame) return;
+        if (!snap.IsAttached) return;
+        // Esc menu = real pause in solo play: freeze the map/session timers and
+        // skip the frame (the overlay is hidden while the menu covers the game).
+        if (snap.State == PluginSDK::GameState::Escape) { m_tracker.SetPaused(true); return; }
+        if (snap.State != PluginSDK::GameState::InGame) return;
+        m_tracker.SetPaused(false);
 
         m_kills.Update(snap);
         // Beacon-element BFS re-find only runs outside town/hideout — idle areas
         // never pay for UI-tree sweeps (a cached element still refreshes there).
         m_resources.Tick(ctx(), !snap.IsTown && !snap.IsHideout);
-        m_tracker.OnFrame(snap, m_resources.Hiveblood(), m_resources.Incursion());
+        m_tracker.OnFrame(snap, m_resources.Hiveblood(), m_resources.Incursion(), &m_kills);
 
         // Atziri beacon gain chime (the one overlay feature deferred to the shell).
         const ResourceReaders::ItState it = m_resources.Incursion();
@@ -144,7 +149,7 @@ public:
     void DrawSettings() override {
         m_settingsOpen = true;                          // consumed + reset by RenderOverlay
         SettingsDeps sd{
-            &m_tracker, &m_prices, &m_settings, &m_zones, &m_kills, &m_resources, m_dir,
+            &m_tracker, &m_prices, &m_settings, &m_zones, &m_kills, &m_resources, &m_icons, m_dir,
             [](float vol) { PlayTone(880, 200, vol); }
         };
         RenderSettings(sd);
