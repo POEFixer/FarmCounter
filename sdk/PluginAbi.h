@@ -38,6 +38,17 @@ extern "C" {
 // version differs.
 #define PLUGIN_SDK_VERSION 6
 
+// Host-synthesized inventory id (NOT a game inventory id): the CURRENTLY OPEN
+// Guild Stash tab. The guild tab inventory does not exist in the game's
+// player-inventory list, so the host publishes it under this reserved id; the
+// InventoryService name for it is "GuildStash1". Only the SELECTED guild tab is
+// materialized by the game, so one id covers the whole guild stash — switching
+// tabs republishes it with the new tab's grid/items, and closing the panel
+// removes it from enumerate/get_all. Use this id (or the "GuildStash" name
+// prefix) to tell guild storage apart from the player's own stash tabs.
+// Data-level contract only — no ABI change (added 2026-08-23, SDK stays v6).
+#define PSDK_INVENTORY_ID_GUILD_STASH 10002
+
 // Coarse entity classification (EntityInfoAbi::entity_type).
 typedef enum {
     PSDK_ENTITY_TYPE_UNIDENTIFIED      = 0,

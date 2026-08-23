@@ -1032,6 +1032,18 @@ struct Inventory {
     }
 };
 
+// The host-synthesized "currently open Guild Stash tab" inventory (see
+// PSDK_INVENTORY_ID_GUILD_STASH in PluginAbi.h). Present in GetAll()/Get()
+// only while the Guild Stash panel is open; its name is "GuildStash1". Use
+// these to separate guild storage from the player's own stash tabs before
+// depositing/withdrawing.
+inline bool IsGuildStashInventoryId(int inventoryId) {
+    return inventoryId == PSDK_INVENTORY_ID_GUILD_STASH;
+}
+inline bool IsGuildStashInventory(const Inventory& inv) {
+    return IsGuildStashInventoryId(inv.InventoryId);
+}
+
 // Per-entity component addresses (0 = absent). Pass a non-zero member to the
 // matching ComponentsService::Read* call; HasX() are convenience checks.
 struct ComponentAddresses {
