@@ -70,12 +70,43 @@ bool LootScanner::RequestAndRead(std::unordered_map<std::string, InvSnapshot>& o
     }
     if (now - m_lastScan < std::chrono::milliseconds(50)) return false;
     m_pending = false;
+    uint64_t stamp = 0;
+    if (!ReadPublished(out, true, &stamp)) return false;
+    m_lastConsumedStamp = stamp;
+    return true;
+}
+
+bool LootScanner::ReadCurrent(std::unordered_map<std::string, InvSnapshot>& out, uint64_t* scanStamp) {
+    return ReadPublished(out, false, scanStamp);
+}
+
+bool LootScanner::ReadPublished(std::unordered_map<std::string, InvSnapshot>& out, bool requireNew, uint64_t* scanStamp) {
     if (!m_ctx) return false;
-    auto all = m_ctx->Inventory.GetAll();
+    auto coherent = m_ctx->Inventory.ReadSnapshot(1);
+    std::vector<PluginSDK::Inventory> legacy;
     const PluginSDK::Inventory* player = nullptr;
-    for (const auto& inv : all)
-        if (inv.InventoryId == 1) { player = &inv; break; }
-    if (!player || player->Items.empty()) return false;
+    if (coherent.Supported) {
+        if (!coherent.Ready || coherent.ScanStamp == 0 ||
+            !m_hasExpectedArea || coherent.AreaChangeCounter != m_expectedAreaCounter ||
+            (requireNew && coherent.ScanStamp == m_lastConsumedStamp)) return false;
+        player = &coherent.Value;
+    } else {
+        // Old hosts do not expose ItemsRead/current-area/completed-scan identity.
+        // Retain their nonempty compatibility, but never certify ambiguous empty
+        // metadata as a baseline. No separate readiness/GetAll race on new hosts.
+        legacy = m_ctx->Inventory.GetAll();
+        for (const auto& inv : legacy)
+            if (inv.InventoryId == 1) { player = &inv; break; }
+        if (!player || player->Items.empty()) return false;
+    }
+    // Zero dimensions describe unloaded inventories. Grid.Valid describes panel
+    // visibility and must not gate a closed backpack. The coherent host producer
+    // additionally verifies actual items were read for this published area.
+    if (!player || !player->Address || player->TotalBoxesX <= 0 || player->TotalBoxesY <= 0 ||
+        player->TotalBoxesX > 1024 || player->TotalBoxesY > 1024 ||
+        static_cast<int64_t>(player->TotalBoxesX) * player->TotalBoxesY > 65536) return false;
     out = BuildSnapshot(*player);
+    if (!coherent.Supported && out.empty()) return false;
+    if (scanStamp) *scanStamp = coherent.Supported ? coherent.ScanStamp : 0;
     return true;
 }

@@ -1,6 +1,7 @@
 #pragma once
 // FarmTypes.h — pure POD types shared across the plugin. std-only (no
 // Windows/ImGui/SDK). Persisted by FarmDb (SQLite) — see FarmDb.h.
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -35,6 +36,10 @@ struct MapRun {
     std::vector<std::string> mapMods;           // rendered area/map modifier lines (from ctx->Game.GetAreaMods)
 
     int KillsTotal() const { return killsNormal + killsMagic + killsRare + killsUnique + killsRogue; }
+    std::array<int64_t, 4> KillsByRarity() const {
+        return {killsNormal, killsMagic, killsRare,
+                static_cast<int64_t>(killsUnique) + killsRogue};
+    }
 };
 
 struct InvSnapshot {

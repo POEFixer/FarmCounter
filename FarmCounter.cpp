@@ -18,6 +18,9 @@
 #include "src/FarmTracker.h"
 #include "src/ui/Overlay.h"
 #include "src/ui/Settings.h"
+#include "src/ui/StatisticsView.h"
+#include "src/ui/ZonesView.h"
+#include "src/StatisticsModel.h"
 
 #include <d3d11.h>
 #include <windows.h>
@@ -90,7 +93,7 @@ public:
 
     bool WantsOverlay() const override {
         return m_settings.wantsOverlay || m_settings.itShow || m_settings.hbShow
-            || m_settings.goldShow;
+            || m_settings.goldShow || m_settings.showXpPerHour;
     }
 
     void OnEnable(bool /*isGameAttached*/) override {
@@ -119,12 +122,28 @@ public:
         if (ctx()->ImGuiContext)
             ImGui::SetCurrentContext(static_cast<ImGuiContext*>(ctx()->ImGuiContext));
 
-        auto snap = ctx()->Game.GetSnapshot();
-        if (!snap.IsAttached) return;
+        // Only kills consume world entities. Loot comes from the backpack, so
+        // avoid copying every ground item's strings each frame near loot piles.
+        auto snap = ctx()->Game.GetSnapshot(PluginSDK::EntityType::Monster);
+        if (!snap.IsAttached) {
+            m_tracker.SetPaused(true);
+            m_tracker.PauseExperience(true);
+            return;
+        }
         // Esc menu = real pause in solo play: freeze the map/session timers and
         // skip the frame (the overlay is hidden while the menu covers the game).
-        if (snap.State == PluginSDK::GameState::Escape) { m_tracker.SetPaused(true); return; }
-        if (snap.State != PluginSDK::GameState::InGame) return;
+        if (snap.State == PluginSDK::GameState::Escape) {
+            m_tracker.SetPaused(true);
+            m_tracker.PauseExperience();
+            return;
+        }
+        if (snap.State != PluginSDK::GameState::InGame) {
+            // Login/loading/detached gaps are not active farming time. Keep
+            // the clock anchors frozen until in-game callbacks resume.
+            m_tracker.SetPaused(true);
+            m_tracker.PauseExperience();
+            return;
+        }
         m_tracker.SetPaused(false);
 
         m_kills.Update(snap);
@@ -133,6 +152,19 @@ public:
         m_resources.Tick(ctx(), !snap.IsTown && !snap.IsHideout);
         m_tracker.OnFrame(snap, m_resources.Hiveblood(), m_resources.Incursion(),
                           m_resources.Gold(), &m_kills);
+        m_tracker.UpdateExperience(snap);
+
+        // Lifetime counts change with history structure, not with every draw.
+        if (m_countRevision != m_tracker.HistoryStructureRevision()) {
+            m_lifetimeCounts = FarmStatistics::CountCategories(m_tracker.Runs(),
+                [this](const std::string& raw) { return m_zones.CategoryKey(raw); });
+            m_countRevision = m_tracker.HistoryStructureRevision();
+        }
+        if (m_countMapName != m_tracker.MapZoneName()) {
+            m_countMapName = m_tracker.MapZoneName();
+            m_countCategory = m_zones.CategoryKey(m_countMapName);
+        }
+        const auto count = m_lifetimeCounts.find(m_countCategory);
 
         // Atziri beacon gain chime (the one overlay feature deferred to the shell).
         const ResourceReaders::ItState it = m_resources.Incursion();
@@ -144,7 +176,8 @@ public:
         // outSettingsConsumed handshake, so the shell does not reset it here.
         OverlayDeps od{
             &m_tracker, &m_prices, &m_icons, &m_kills, &m_resources, &m_zones,
-            &m_settings, m_settingsOpen, &m_settingsOpen
+            &m_settings, m_settingsOpen, &m_settingsOpen,
+            count != m_lifetimeCounts.end() ? count->second : 0, &m_countCategory
         };
         RenderOverlay(od);
     }
@@ -153,7 +186,7 @@ public:
         m_settingsOpen = true;                          // consumed + reset by RenderOverlay
         SettingsDeps sd{
             &m_tracker, &m_prices, &m_settings, &m_zones, &m_kills, &m_resources, &m_icons, m_dir,
-            [](float vol) { PlayTone(880, 200, vol); }
+            [](float vol) { PlayTone(880, 200, vol); }, &m_statisticsView, &m_zonesView
         };
         RenderSettings(sd);
     }
@@ -169,6 +202,11 @@ private:
     KillCounter           m_kills;
     ZoneNames             m_zones;
     FarmTracker           m_tracker;
+    StatisticsView        m_statisticsView;
+    ZonesView             m_zonesView;
+    std::unordered_map<std::string, size_t> m_lifetimeCounts;
+    uint64_t              m_countRevision = UINT64_MAX;
+    std::string           m_countMapName, m_countCategory;
     bool                  m_settingsOpen = false;
     int                   m_lastTokens   = -1;   // last seen beacon count (chime edge-detect)
 };

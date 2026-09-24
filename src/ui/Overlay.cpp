@@ -23,6 +23,8 @@
 //     `disp` helper returns by value), never bound to a longer-lived reference.
 #include "Overlay.h"
 #include "Theme.h"
+#include "Formatting.h"
+#include "../LootRows.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -62,6 +64,38 @@ inline float IconWidthForLine(const IconTex& tex, float lineH) {
 void DrawTriangle(ImDrawList* dl, ImVec2 c, float r, bool up, ImU32 col) {
     if (up) dl->AddTriangleFilled(ImVec2(c.x, c.y - r), ImVec2(c.x - r, c.y + r), ImVec2(c.x + r, c.y + r), col);
     else    dl->AddTriangleFilled(ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y - r), col);
+}
+
+float ExperienceRateColumnWidth() {
+    // Count() emits at most three digits for the rate's compact K/M/B/T form.
+    // XpTracker requires a full second, so a uint32 XP delta cannot need the
+    // scientific fallback. Reserve the widest glyphs, including a death loss,
+    // independently of the current value or number of displayed decimals.
+    float digits = 0.f;
+    for (char digit = '0'; digit <= '9'; ++digit) {
+        const char text[] = {digit, digit, digit, '\0'};
+        digits = (std::max)(digits, ImGui::CalcTextSize(text).x);
+    }
+    float unit = 0.f;
+    for (const char* text : {"K", "M", "B", "T"})
+        unit = (std::max)(unit, ImGui::CalcTextSize(text).x);
+    return std::ceil(digits + unit + ImGui::CalcTextSize("-. XP/h").x) + 1.f;
+}
+
+void DrawExperienceLine(const XpTracker& xp, const MapXpTracker& mapXp) {
+    ImGui::TextColored(FcTheme::kGold, "L%s", xp.HasSample() ? std::to_string(xp.Level()).c_str() : "--");
+    ImGui::SameLine(0.f, 8.f);
+    const ImVec2 ratePosition = ImGui::GetCursorScreenPos();
+    ImGui::TextColored(xp.XpPerHour() < 0.0 ? FcTheme::kLoss : FcTheme::kXp, "%s XP/h",
+                       xp.HasSample() ? FcFormat::Count(xp.XpPerHour()).c_str() : "--");
+    ImGui::SameLine(0.f, 8.f);
+    ImGui::SetCursorScreenPos(ImVec2(ratePosition.x + ExperienceRateColumnWidth() + 8.f, ratePosition.y));
+    ImGui::TextColored(mapXp.GainedXp() < 0 ? FcTheme::kLoss : FcTheme::kDim, "Map %s XP",
+                       mapXp.HasSample() ? FcFormat::Count(static_cast<double>(mapXp.GainedXp()), true).c_str() : "--");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Current-map net XP includes death losses.\nRate measurement: %s XP in %s%s",
+                          FcFormat::Count(static_cast<double>(xp.GainedXp()), true).c_str(),
+                          FcFormat::Duration(xp.ActiveSeconds()).c_str(), xp.IsRunning() ? "" : " (paused)");
 }
 
 // Small colored square ("rarity dot") drawn inline at the cursor, advancing past
@@ -280,7 +314,6 @@ void RenderOverlay(const OverlayDeps& d) {
         if (zoneDisp.empty()) zoneDisp = "Unknown Zone";
 
         const int mapSec = tr.CurrentMapSec();   // pause-honest (Esc menu excluded)
-        int mmm = mapSec / 60, mss = mapSec % 60;
 
         const float padX = 6.f, padY = 3.f;
         ImVec2 winPos  = ImGui::GetWindowPos();
@@ -301,7 +334,7 @@ void RenderOverlay(const OverlayDeps& d) {
 
         if (inMap) {
             ImGui::SameLine(0.f, 6.f);
-            ImGui::TextColored(FcTheme::kDim, "(%02d:%02d)", mmm, mss);
+            ImGui::TextColored(FcTheme::kDim, "(%s)", FcFormat::Duration(mapSec, true).c_str());
             if (!baseReady) {
                 ImGui::SameLine(0.f, 8.f);
                 ImGui::TextColored(FcTheme::kAccent, "scanning...");
@@ -331,7 +364,6 @@ void RenderOverlay(const OverlayDeps& d) {
     // ── Compact stat strip (session · profit/h · kills · maps) ─────────────────
     {
         const int sess = tr.SessionActiveSec();   // contract #1: never SessionStart()
-        const int smm = sess / 60, sss = sess % 60;
         int sessionMaps = 0;
         float sessionChaos = 0.f;
         for (const auto& r : tr.Runs())
@@ -340,7 +372,7 @@ void RenderOverlay(const OverlayDeps& d) {
 
         ImGui::TextColored(FcTheme::kDim, "%s", FcGlyph::Session);
         ImGui::SameLine(0.f, 4.f);
-        ImGui::Text("%02d:%02d", smm, sss);
+        ImGui::TextUnformatted(FcFormat::Duration(sess).c_str());
 
         if (s.showProfitPerHour) {
             ImGui::SameLine(0.f, 8.f); ImGui::TextDisabled("|"); ImGui::SameLine(0.f, 8.f);
@@ -360,6 +392,18 @@ void RenderOverlay(const OverlayDeps& d) {
         ImGui::TextColored(FcTheme::kDim, "%s", FcGlyph::Map);
         ImGui::SameLine(0.f, 4.f);
         ImGui::Text("%d", sessionMaps);
+        if (inMap && d.currentMapCategory && !d.currentMapCategory->empty()) {
+            ImGui::SameLine(0.f, 8.f); ImGui::TextDisabled("|"); ImGui::SameLine(0.f, 8.f);
+            ImGui::BeginGroup();
+            ImGui::TextColored(FcTheme::kDim, "%s", FcGlyph::Visits);
+            ImGui::SameLine(0.f, 4.f);
+            ImGui::Text("%zu", d.currentMapLifetimeRuns);
+            ImGui::EndGroup();
+            if (ImGui::IsItemHovered()) {
+                const auto& name = d.zones ? d.zones->CategoryDisplay(*d.currentMapCategory) : *d.currentMapCategory;
+                ImGui::SetTooltip("%s: recorded runs across all saved sessions, including this run.", name.c_str());
+            }
+        }
 
         // Kills on a separate line.
         if (s.kcShow) {
@@ -372,6 +416,11 @@ void RenderOverlay(const OverlayDeps& d) {
 
     if (!tr.SessionRunning())
         ImGui::TextColored(FcTheme::kLoss, "Paused — resumes on next map");
+
+    if (s.showXpPerHour) {
+        ImGui::Spacing();
+        DrawExperienceLine(tr.Experience(), tr.MapExperience());
+    }
 
     // ── Inline resource rows (Gold / Hiveblood / Atziri beacons) ───────────────
     bool barsDrawn = false;
@@ -466,18 +515,11 @@ void RenderOverlay(const OverlayDeps& d) {
 
     // ── Loot list (only in map, baseline ready, items enabled; old :963-1041) ──
     if (inMap && baseReady && s.showItems) {
-        std::vector<const LootEntry*> priced, unpriced;
-        for (const auto& e : tr.Loot()) {
-            if (e.chaosEach > 0.f) priced.push_back(&e);
-            else                    unpriced.push_back(&e);
-        }
-        std::sort(priced.begin(), priced.end(), [](const LootEntry* a, const LootEntry* b) {
-            return (a->chaosEach * std::abs(a->stackCount)) > (b->chaosEach * std::abs(b->stackCount));
-        });
+        const auto visible = SelectLootRows(tr.Loot(), s.showUnpriced, s.visibleItemRows);
 
         ImGui::Separator();
 
-        if (priced.empty() && unpriced.empty()) {
+        if (visible.rows.empty()) {
             ImGui::TextDisabled("No changes yet");
         } else {
             ImGuiTableFlags tfl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoBordersInBody;
@@ -485,7 +527,7 @@ void RenderOverlay(const OverlayDeps& d) {
                 ImGui::TableSetupColumn("##name",  ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableSetupColumn("##price", ImGuiTableColumnFlags_WidthFixed, 80.f);
 
-                for (const auto* e : priced) {
+                for (const auto* e : visible.rows) {
                     bool lost   = e->stackCount < 0;
                     int  absStk = std::abs(e->stackCount);
                     ImVec4 col  = lost ? FcTheme::kLoss : FcTheme::kGain;
@@ -498,7 +540,7 @@ void RenderOverlay(const OverlayDeps& d) {
 
                     // Price column: right-aligned value + currency icon (old :1002-1015).
                     ImGui::TableNextColumn();
-                    {
+                    if (e->chaosEach > 0.f && std::isfinite(e->chaosEach)) {
                         const IconTex& ci = d.icons->Currency(curIdx);
                         float iconW = IconWidthForLine(ci, lineH);
                         float gap   = iconW > 0.f ? 3.f : 0.f;
@@ -513,22 +555,9 @@ void RenderOverlay(const OverlayDeps& d) {
                     }
                 }
 
-                if (s.showUnpriced && !unpriced.empty()) {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    if (!priced.empty()) ImGui::Separator();
-                    ImGui::TextDisabled("-- No Price --");
-                    ImGui::TableNextColumn();
-                    for (const auto* e : unpriced) {
-                        ImVec4 col = e->stackCount < 0 ? FcTheme::kLoss : FcTheme::kGain;
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        DrawLootNameCell(d, *e, col, lineH);
-                        ImGui::TableNextColumn();
-                    }
-                }
                 ImGui::EndTable();
             }
+            if (visible.hidden > 0) ImGui::TextDisabled("+%zu more items", visible.hidden);
         }
     }
 

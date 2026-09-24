@@ -3,6 +3,8 @@
 #include "LootDiff.h"
 #include "Persistence.h"
 #include <cstdio>
+#include <algorithm>
+#include <limits>
 
 using Clock = std::chrono::steady_clock;
 
@@ -18,11 +20,25 @@ void FarmTracker::Init(const PluginSDK::Context* ctx, PriceProvider* prices,
 }
 
 void FarmTracker::OnEnable() {
-    // Restore runs + session from SQLite (sessionActiveSec is reset from the DB;
-    // the session-id high-water mark is only ever raised).
-    if (!m_db.Open(m_dir) && m_ctx)
-        m_ctx->Log.Error("[FarmCounter] farmstats.db failed to open — statistics won't persist");
-    m_db.LoadAll(m_MapRuns, m_SessionActiveSec, m_CurrentSessionId);
+    // A watchdog can stop DrawUI without OnDisable. Preserve the last completed
+    // frame before reload, using its observed elapsed time, never the disabled
+    // wall-clock gap. Failed writes keep the authoritative in-memory history.
+    bool canReload = true;
+    if (m_HasRuntimeState) {
+        m_SessionActiveSec = m_LastObservedSessionSec;
+        m_SessionTimerRunning = false;
+        m_MetaDirty = true;
+        canReload = Save();
+    }
+    if (!m_db.IsOpen() && !PersistenceResult(m_db.Open(m_dir))) canReload = false;
+    if (canReload && PersistenceResult(m_db.LoadAll(m_MapRuns, m_SessionActiveSec, m_CurrentSessionId))) {
+        m_DirtyRunIds.clear();
+        m_PendingDiscards.clear();
+        m_MetaDirty = false;
+        MarkHistoryChanged(true);
+    }
+    m_HasRuntimeState = true;
+    m_LastObservedSessionSec = m_SessionActiveSec;
     // The host re-enables the SAME plugin instance, so tracking members persist
     // across disable→enable. Reset them: the current map (if any) re-detects on
     // the next frame and starts a FRESH run — otherwise a stale m_ActiveRunIdx
@@ -36,16 +52,23 @@ void FarmTracker::OnEnable() {
     m_AccumulatedDurationSec = 0;
     m_IsResume         = false;
     m_WasInPassThrough = false;
+    m_MapModRetry.Reset(Clock::now());
     m_LootLog.clear();
     m_CarryoverLoot.clear();
     m_BaselineSnap.clear();
     m_BaselineCandidate.clear();
+    m_LastCurrentSnap.clear();
+    m_HasBaselineCandidate = false;
+    m_HasLastCurrentSnap = false;
     m_BaselineReady = false;
     m_NeedBaseline  = true;
     m_scanner.ResetTiming();
     m_GoldLast        = -1;    // first fresh read only arms, never attributes
     m_KillsRebaseline = true;  // ditto for the per-area kill counters
     m_Paused = false;
+    m_experience.Clear();
+    m_mapExperience.Clear();
+    m_lastExperienceRead = {};
     auto now = Clock::now();
     m_ZoneEnterTime       = now;
     m_HideoutEnterTime    = now;
@@ -54,9 +77,13 @@ void FarmTracker::OnEnable() {
 }
 
 void FarmTracker::OnDisable() {
-    // Flush the live entry + meta on the way out.
-    SetPaused(false);
-    UpdateLiveRun();
+    // The completed frame already updated its run. OnDisable can also arrive
+    // long after a watchdog stopped callbacks, so do not recompute elapsed here.
+    PauseExperience();
+    m_SessionActiveSec = m_LastObservedSessionSec;
+    m_SessionTimerRunning = false;
+    m_Paused = false;
+    m_MetaDirty = true;
     Save();
     m_db.Close();
 }
@@ -79,6 +106,7 @@ void FarmTracker::SetPaused(bool paused) {
     m_HideoutEnterTime   += d;
     m_SessionActiveStart += d;
     m_LastPeriodicSave   += d;
+    m_MapModRetry.Shift(d);
     m_Paused = false;
 }
 
@@ -87,6 +115,36 @@ int FarmTracker::CurrentMapSec() const {
     const auto end = m_Paused ? m_PauseStart : Clock::now();
     const auto sec = std::chrono::duration_cast<std::chrono::seconds>(end - m_ZoneEnterTime).count();
     return (int)(sec < 0 ? 0 : sec);
+}
+
+void FarmTracker::UpdateExperience(const PluginSDK::Snapshot& snap) {
+    const auto now = Clock::now();
+    const bool running = m_SessionTimerRunning && !m_Paused && !snap.IsPaused;
+    const auto kind = ClassifyZone(snap.CurrentAreaName);
+    const bool areaChanged = m_mapExperience.ObserveArea(snap.CurrentAreaHash, kind.isMap, kind.isPassThrough);
+    // Clock updates are cheap and keep the display smooth. Player/name memory
+    // reads are sampled at 4 Hz, including while the XP block is hidden.
+    m_experience.Tick(running, now);
+    if (!m_ctx || (!areaChanged && now - m_lastExperienceRead < std::chrono::milliseconds(250))) return;
+    m_lastExperienceRead = now;
+    const auto player = m_ctx->Components.ReadPlayer(snap.Player.Components.Player);
+    if (player.Valid) {
+        m_experience.Sample(player.Name, player.Xp, player.Level, running, now);
+        m_mapExperience.Sample(player.Name, player.Xp, player.Level);
+    }
+}
+
+void FarmTracker::PauseExperience(bool discardBaseline) {
+    m_experience.Tick(false, Clock::now());
+    m_lastExperienceRead = {};
+    // A detached game can keep progressing without the overlay. A fresh read
+    // after reattachment must not attribute that XP to the old active time.
+    if (discardBaseline) { m_experience.Clear(); m_mapExperience.Clear(); }
+}
+
+void FarmTracker::ResetExperience() {
+    m_experience.Reset();
+    m_lastExperienceRead = {};
 }
 
 // ── Per-frame entry point ────────────────────────────────────────────────────
@@ -99,6 +157,9 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
     if (!m_ctx) return;
     if (!snap.IsAttached) return;
     if (snap.State != PluginSDK::GameState::InGame) return;
+    // The host may publish a newer area between GetSnapshot and inventory reads
+    // (or before a settings reset). Never fold that publication into this frame.
+    m_scanner.SetAreaCounter(snap.AreaChangeCounter);
 
     // ── Zone change detection ────────────────────────────────────────────────
     if (snap.CurrentAreaHash != m_CurrentAreaHash) {
@@ -134,6 +195,8 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
                 m_LootLog       = m_CarryoverLoot;
                 m_BaselineSnap.clear();
                 m_BaselineCandidate.clear();
+                m_HasBaselineCandidate = false;
+                m_HasLastCurrentSnap = false;
                 m_BaselineReady = false;
                 m_NeedBaseline  = true;
                 m_scanner.ResetTiming();
@@ -144,6 +207,7 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
                 m_HbBaseline    = m_HbCarryoverBaseline;
                 m_ItHasBaseline = m_ItCarryoverHasBaseline;
                 m_ItBaseline    = m_ItCarryoverBaseline;
+                m_MapModRetry.Reset(Clock::now());
                 // m_AccumulatedDurationSec already holds time from previous visits;
                 // m_ActiveRunIdx is still valid (we never finalized on exit) — just continue.
             }
@@ -151,7 +215,7 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
             // new map instance — finalize the previous (suspended) run if any
             if (m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size()) {
                 const MapRun& prev = m_MapRuns[m_ActiveRunIdx];
-                if (!prev.loot.empty() || prev.durationSec >= 10) FinalizeMapRun();
+                if (HasMeaningfulActivity(prev)) FinalizeMapRun();
                 else DiscardLiveRun();
             }
             m_MapZoneName            = m_CurrentZone;
@@ -164,6 +228,9 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
             m_CarryoverLoot.clear();
             m_BaselineSnap.clear();
             m_BaselineCandidate.clear();
+            m_LastCurrentSnap.clear();
+            m_HasBaselineCandidate = false;
+            m_HasLastCurrentSnap = false;
             m_BaselineReady          = false;
             m_NeedBaseline           = true;
             m_scanner.ResetTiming();
@@ -178,18 +245,22 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
             m_ItCarryoverBaseline    = 0;
             m_ItHasBaseline          = false;
             m_ItBaseline             = 0;
+            m_MapModRetry.Reset(Clock::now());
             StartLiveRun();
         } else {
             // leaving a map to hideout / other non-map — suspend (do NOT finalize)
             // so a later same-hash re-entry resumes the same entry.
             if (m_InMap) {
-                if (!m_BaselineReady) {
+                if (!m_BaselineReady && (m_ActiveRunIdx < 0 ||
+                    !HasMeaningfulActivity(m_MapRuns[m_ActiveRunIdx]))) {
                     // never captured a baseline — discard the placeholder
                     DiscardLiveRun();
                     m_LootLog.clear();
                     m_CarryoverLoot.clear();
                     m_BaselineSnap.clear();
                     m_BaselineCandidate.clear();
+                    m_HasBaselineCandidate = false;
+                    m_HasLastCurrentSnap = false;
                     m_MapAreaHash.clear();
                     m_AccumulatedDurationSec = 0;
                 } else {
@@ -250,8 +321,10 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
         if (m_GoldLast >= 0) {
             const int delta = gold.total - m_GoldLast;
             if (delta > 0 && m_InMap &&
-                m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size())
+                m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size()) {
                 m_MapRuns[m_ActiveRunIdx].goldGain += delta;
+                MarkRunDirty(m_MapRuns[m_ActiveRunIdx]);
+            }
         }
         m_GoldLast = gold.total;   // arm/refresh (first read never counts)
     }
@@ -261,17 +334,23 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
 
     // ── Map modifiers: capture once per run from the host. The core renders them
     //    only inside a real map (empty otherwise) and can lag map-enter, so retry
-    //    for a bounded window rather than every frame forever. Not captured in a
-    //    pass-through sub-zone (Abyss/HungerBoss) — keep the map's own mods. ─────
+    //    for a bounded window rather than every frame forever. The host may
+    //    publish the stat containers late, so keep a matching bounded window
+    //    while throttling this render-thread probe. Not captured in a
+    //    pass-through sub-zone (Abyss/HungerBoss) — keep the map's own mods.
+    const auto mapModNow = Clock::now();
     if (m_InMap && !m_WasInPassThrough && m_ctx
         && m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size()
         && m_MapRuns[m_ActiveRunIdx].mapMods.empty()
-        && CurrentMapSec() < 20) {   // core has a 10s populate window; stop after 20s
+        && CurrentMapSec() < 120
+        && m_MapModRetry.ShouldAttempt(mapModNow)) {
         auto mods = m_ctx->Game.GetAreaMods();
+        m_MapModRetry.RecordAttempt(Clock::now(), !mods.empty());
         if (!mods.empty()) {
             auto& dst = m_MapRuns[m_ActiveRunIdx].mapMods;
             dst.clear(); dst.reserve(mods.size());
             for (const auto& m : mods) dst.push_back(m.text);
+            MarkRunDirty(m_MapRuns[m_ActiveRunIdx]);
         }
     }
 
@@ -282,7 +361,8 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
     // Periodic save (live-run row + session meta; map-exit saves are immediate above).
     {
         auto now = Clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - m_LastPeriodicSave).count() >= 15) {
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - m_LastPeriodicSave).count() >= 15 ||
+            (HasUnsavedChanges() && !m_LastPersistenceError.empty() && now - m_LastSaveAttempt >= std::chrono::seconds(1))) {
             m_LastPeriodicSave = now;
             Save();
         }
@@ -303,6 +383,10 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
         m_SessionActiveStart  = Clock::now();
         m_SessionTimerRunning = true;
     }
+    const int activeSec = SessionActiveSec();
+    if (activeSec != m_LastObservedSessionSec) m_MetaDirty = true;
+    m_LastObservedSessionSec = activeSec;
+    PublishHistoryChanges();
 }
 
 void FarmTracker::AccumulateKills(const KillCounter* kills) {
@@ -339,6 +423,7 @@ void FarmTracker::AccumulateKills(const KillCounter* kills) {
     r.killsRare   += dr;
     r.killsUnique += du;
     r.killsRogue  += dg;
+    if (dn || dm || dr || du || dg) MarkRunDirty(r);
 }
 
 // ── Inventory scan orchestration ─────────────────────────────────────────────
@@ -356,12 +441,14 @@ void FarmTracker::ScanInventory() {
     }
 
     m_LastCurrentSnap = snap;
+    m_HasLastCurrentSnap = true;
     if (m_NeedBaseline) {
         // Stability gate: lock baseline only once two consecutive 1s reads are identical.
         // The game lazily fills the backpack list ~10-15s after map-enter, so the first
         // non-empty read can be partial — locking then would count late items as loot.
-        if (m_BaselineCandidate.empty() || !SnapshotStable(snap, m_BaselineCandidate)) {
+        if (!m_HasBaselineCandidate || !SnapshotStable(snap, m_BaselineCandidate)) {
             m_BaselineCandidate = std::move(snap);
+            m_HasBaselineCandidate = true;
             return;
         }
         m_BaselineSnap      = std::move(snap);
@@ -369,6 +456,7 @@ void FarmTracker::ScanInventory() {
         m_NeedBaseline      = false;
         m_IsResume          = false;
         m_BaselineCandidate.clear();
+        m_HasBaselineCandidate = false;
         return;
     }
     // Diff current vs baseline, merged over carryover (drops zero-stack entries).
@@ -384,7 +472,9 @@ void FarmTracker::StartLiveRun() {
     run.startedAt = 0;                 // stamped by FarmDb::InsertRun
     m_MapRuns.push_back(std::move(run));
     m_ActiveRunIdx = (int)m_MapRuns.size() - 1;
-    m_db.InsertRun(m_MapRuns.back());  // sets dbId + startedAt/startedText
+    MarkHistoryChanged(true);
+    MarkRunDirty(m_MapRuns.back());
+    Save();
 }
 
 void FarmTracker::UpdateLiveRun() {
@@ -395,15 +485,26 @@ void FarmTracker::UpdateLiveRun() {
         totalChaos += e.chaosEach * (float)e.stackCount;
     float exRate = m_prices ? m_prices->ExaltedInChaos() : 1.f;
     MapRun& r = m_MapRuns[m_ActiveRunIdx];
+    const int duration = m_AccumulatedDurationSec + CurrentMapSec();
+    const int hiveblood = m_HbHasCached && m_HbHasBaseline && m_HbCachedTotal >= m_HbBaseline
+        ? m_HbCachedTotal - m_HbBaseline : r.hivebloodGain;
+    const int beacons = m_ItHasCached && m_ItHasBaseline && m_ItCachedCur >= m_ItBaseline
+        ? m_ItCachedCur - m_ItBaseline : r.beaconGain;
+    const bool sameLoot = r.loot.size() == m_LootLog.size() &&
+        std::equal(r.loot.begin(), r.loot.end(), m_LootLog.begin(), [](const LootEntry& a, const LootEntry& b) {
+            return a.name == b.name && a.stackCount == b.stackCount && a.chaosEach == b.chaosEach &&
+                a.rarity == b.rarity && a.iconPath == b.iconPath;
+        });
+    const bool changed = r.durationSec != duration || r.totalChaos != totalChaos || r.exaltedRate != exRate ||
+        r.hivebloodGain != hiveblood || r.beaconGain != beacons || !sameLoot;
     // Accumulate: prior visits + current visit (pause-honest).
-    r.durationSec = m_AccumulatedDurationSec + CurrentMapSec();
+    r.durationSec = duration;
     r.totalChaos  = totalChaos;
     r.exaltedRate = exRate;
     r.loot        = m_LootLog;
-    if (m_HbHasCached && m_HbHasBaseline && m_HbCachedTotal >= m_HbBaseline)
-        r.hivebloodGain = m_HbCachedTotal - m_HbBaseline;
-    if (m_ItHasCached && m_ItHasBaseline && m_ItCachedCur >= m_ItBaseline)
-        r.beaconGain = m_ItCachedCur - m_ItBaseline;
+    r.hivebloodGain = hiveblood;
+    r.beaconGain = beacons;
+    if (changed) MarkRunDirty(r);
 }
 
 void FarmTracker::FinalizeMapRun() {
@@ -411,9 +512,8 @@ void FarmTracker::FinalizeMapRun() {
     UpdateLiveRun();
     if (m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size()) {
         const MapRun& run = m_MapRuns[m_ActiveRunIdx];
-        if (run.loot.empty() && run.durationSec < 10) {
-            m_db.DeleteRun(run.dbId);
-            m_MapRuns.erase(m_MapRuns.begin() + m_ActiveRunIdx);
+        if (!HasMeaningfulActivity(run)) {
+            DiscardLiveRun();
         } else {
             Save();
         }
@@ -425,8 +525,9 @@ void FarmTracker::FinalizeMapRun() {
 
 void FarmTracker::DiscardLiveRun() {
     if (m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size()) {
-        m_db.DeleteRun(m_MapRuns[m_ActiveRunIdx].dbId);
-        m_MapRuns.erase(m_MapRuns.begin() + m_ActiveRunIdx);
+        const auto id = m_MapRuns[m_ActiveRunIdx].dbId;
+        if (id == 0 || PersistenceResult(m_db.DeleteRun(id))) EraseRunAt(m_ActiveRunIdx);
+        else m_PendingDiscards.insert(id);
     }
     m_ActiveRunIdx           = -1;
     m_AccumulatedDurationSec = 0;
@@ -446,30 +547,72 @@ int FarmTracker::SessionActiveSec() const {
     return s;
 }
 
-void FarmTracker::NewSession() {
+bool FarmTracker::NewSession() {
     // Flush the live run's freshest state (loot/kills since the last periodic
     // save) BEFORE archiving — the archive below only flips flags.
     UpdateLiveRun();
-    if (m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size())
-        m_db.UpdateRun(m_MapRuns[m_ActiveRunIdx]);
-    // Archive every active run under a freshly-incremented session id, then reset
-    // current-map tracking so the overlay clears.
-    m_CurrentSessionId++;
-    for (auto& r : m_MapRuns)
-        if (!r.archived) { r.archived = true; r.sessionId = m_CurrentSessionId; }
-    m_db.ArchiveActiveRuns(m_CurrentSessionId);
-    m_ActiveRunIdx   = -1;
+    // Previous maps may also be dirty/id0 after a failed write. Preserve them
+    // before the atomic archive; a failed preflight changes no session identity.
+    if (!Save()) return false;
+    if (m_CurrentSessionId == (std::numeric_limits<int>::max)()) {
+        m_LastPersistenceError = "Session identifier limit reached";
+        return false;
+    }
+    const bool restartMap = m_InMap && !m_MapZoneName.empty();
+    std::unordered_map<std::string, InvSnapshot> resetSnapshot;
+    uint64_t resetStamp = 0;
+    const bool ready = restartMap && m_BaselineReady && m_HasLastCurrentSnap && m_scanner.ReadCurrent(resetSnapshot, &resetStamp);
+    // Reserve/copy before COMMIT so publishing the next history is a no-throw
+    // swap. A reset inside HungerBoss retains the parent map's identity.
+    auto nextRuns = m_MapRuns;
+    nextRuns.reserve(nextRuns.size() + (restartMap ? 1 : 0));
+    auto resetDisplaySnapshot = resetSnapshot;
+    MapRun fresh;
+    if (restartMap) fresh.mapName = m_MapZoneName;
+    MapRun* old = m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)nextRuns.size()
+        ? &nextRuns[m_ActiveRunIdx] : nullptr;
+    if (old && ready) {
+        // A completed host scan can arrive between the last periodic diff and
+        // the click. Attribute its pre-reset pickups to the archived candidate,
+        // while using precisely the same snapshot as the new segment baseline.
+        old->loot = DiffLoot(m_BaselineSnap, resetSnapshot, m_CarryoverLoot);
+        old->totalChaos = 0.f;
+        for (const auto& item : old->loot) old->totalChaos += item.chaosEach * (float)item.stackCount;
+    }
+    const int nextSession = m_CurrentSessionId + 1;
+    if (!PersistenceResult(m_db.BeginNewSession(old, nextSession, restartMap ? &fresh : nullptr))) return false;
+    for (auto& run : nextRuns)
+        if (!run.archived) { run.archived = true; run.sessionId = nextSession; }
+    if (restartMap) nextRuns.push_back(std::move(fresh));
+    m_MapRuns.swap(nextRuns);
+    m_CurrentSessionId = nextSession;
+    m_ActiveRunIdx = restartMap ? (int)m_MapRuns.size() - 1 : -1;
     m_LootLog.clear();
     m_CarryoverLoot.clear();
-    m_BaselineSnap.clear();
+    m_BaselineSnap = std::move(resetSnapshot);
     m_BaselineCandidate.clear();
-    m_BaselineReady  = false;
-    m_NeedBaseline   = true;
-    m_scanner.ResetTiming();
-    m_MapZoneName.clear();
-    m_MapAreaHash.clear();
-    m_InMap                  = false;
+    m_HasBaselineCandidate = false;
+    m_LastCurrentSnap = std::move(resetDisplaySnapshot);
+    m_HasLastCurrentSnap = ready;
+    m_BaselineReady = ready;
+    m_NeedBaseline = !ready;
+    m_scanner.ResetTiming(resetStamp);
+    if (!restartMap) {
+        m_MapZoneName.clear();
+        m_MapAreaHash.clear();
+        m_WasInPassThrough = false;
+    }
+    m_InMap = restartMap;
+    m_IsResume = restartMap && !ready; // same area, no new-map settle delay
     m_AccumulatedDurationSec = 0;
+    m_HbHasBaseline = restartMap && m_HbHasCached;
+    m_HbBaseline = m_HbHasBaseline ? m_HbCachedTotal : 0;
+    m_ItHasBaseline = restartMap && m_ItHasCached;
+    m_ItBaseline = m_ItHasBaseline ? m_ItCachedCur : 0;
+    m_HbCarryoverHasBaseline = false;
+    m_ItCarryoverHasBaseline = false;
+    // Gold/kills keep their last observed counters as the new delta boundary;
+    // clearing them would either recount old gains or swallow the first pickup.
     // While Esc-paused, anchor to the pause start: the resume shift adds the
     // full pause duration to these, which would otherwise push wall-clock-`now`
     // anchors into the future (negative elapsed until real time catches up).
@@ -479,39 +622,119 @@ void FarmTracker::NewSession() {
     m_SessionActiveSec    = 0;
     m_SessionActiveStart  = now;
     m_SessionTimerRunning = true;
-    Save();
+    m_LastObservedSessionSec = 0;
+    m_DirtyRunIds.clear();
+    m_MetaDirty = false;
+    MarkHistoryChanged(true);
+    return true;
 }
 
-void FarmTracker::DeleteRunAt(int idx) {
-    if (idx < 0 || idx >= (int)m_MapRuns.size()) return;
-    if (idx == m_ActiveRunIdx) return;   // the live run is not deletable from the UI
-    m_db.DeleteRun(m_MapRuns[idx].dbId);
-    m_MapRuns.erase(m_MapRuns.begin() + idx);
-    if (idx < m_ActiveRunIdx) m_ActiveRunIdx--;
+bool FarmTracker::DeleteRunAt(int idx) {
+    if (idx < 0 || idx >= (int)m_MapRuns.size()) return false;
+    if (idx == m_ActiveRunIdx) return false;
+    if (!PersistenceResult(m_db.DeleteRun(m_MapRuns[idx].dbId))) return false;
+    EraseRunAt(idx);
+    return true;
 }
 
-void FarmTracker::DeleteArchivedSession(int sessionId) {
-    m_db.DeleteSession(sessionId);
+bool FarmTracker::DeleteArchivedSession(int sessionId) {
+    if (!PersistenceResult(m_db.DeleteSession(sessionId))) return false;
     for (int i = (int)m_MapRuns.size() - 1; i >= 0; i--) {
         if (m_MapRuns[i].archived && m_MapRuns[i].sessionId == sessionId) {
-            m_MapRuns.erase(m_MapRuns.begin() + i);
-            if (i < m_ActiveRunIdx) m_ActiveRunIdx--;
+            EraseRunAt(i);
         }
     }
+    return true;
 }
 
-void FarmTracker::DeleteAllArchived() {
-    m_db.DeleteAllArchived();
+bool FarmTracker::DeleteAllArchived() {
+    if (!PersistenceResult(m_db.DeleteAllArchived())) return false;
     for (int i = (int)m_MapRuns.size() - 1; i >= 0; i--) {
         if (m_MapRuns[i].archived) {
-            m_MapRuns.erase(m_MapRuns.begin() + i);
-            if (i < m_ActiveRunIdx) m_ActiveRunIdx--;
+            EraseRunAt(i);
         }
+    }
+    return true;
+}
+
+bool FarmTracker::HasMeaningfulActivity(const MapRun& run) {
+    return !run.loot.empty() || run.durationSec >= 10 || run.goldGain > 0 ||
+        run.hivebloodGain > 0 || run.beaconGain > 0 || run.KillsTotal() > 0;
+}
+
+void FarmTracker::EraseRunAt(int idx) {
+    const auto id = m_MapRuns[idx].dbId;
+    m_DirtyRunIds.erase(id);
+    m_PendingDiscards.erase(id);
+    m_MapRuns.erase(m_MapRuns.begin() + idx);
+    if (idx == m_ActiveRunIdx) m_ActiveRunIdx = -1;
+    else if (idx < m_ActiveRunIdx) --m_ActiveRunIdx;
+    // Other pending rows may share id0; retaining the marker is necessary for
+    // unsaved-status as well as for a later retry after an index shift.
+    for (const auto& run : m_MapRuns) if (run.dbId == 0) m_DirtyRunIds.insert(0);
+    MarkHistoryChanged(true);
+}
+
+bool FarmTracker::PersistenceResult(bool success) {
+    if (!success) {
+        m_LastPersistenceError = m_db.LastError();
+        if (m_LastPersistenceError.empty()) m_LastPersistenceError = "Statistics could not be saved";
+    } else if (!HasUnsavedChanges()) m_LastPersistenceError.clear();
+    return success;
+}
+
+void FarmTracker::MarkRunDirty(const MapRun& run) {
+    m_DirtyRunIds.insert(run.dbId);
+    MarkHistoryChanged();
+}
+
+void FarmTracker::MarkHistoryChanged(bool structure) {
+    if (structure) {
+        ++m_HistoryStructureRevision;
+        ++m_HistoryRevision;
+        m_LastHistoryPublish = Clock::now();
+        m_HistoryPending = false;
+    } else {
+        m_HistoryPending = true;
+        PublishHistoryChanges();
     }
 }
 
-void FarmTracker::Save() {
-    if (m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size())
-        m_db.UpdateRun(m_MapRuns[m_ActiveRunIdx]);
-    m_db.SaveMeta(SessionActiveSec(), m_CurrentSessionId);
+void FarmTracker::PublishHistoryChanges() {
+    const auto now = Clock::now();
+    if (m_HistoryPending && now - m_LastHistoryPublish >= std::chrono::seconds(1)) {
+        ++m_HistoryRevision;
+        m_LastHistoryPublish = now;
+        m_HistoryPending = false;
+    }
+}
+
+bool FarmTracker::Save() {
+    m_LastSaveAttempt = Clock::now();
+    if (!m_db.IsOpen() && !PersistenceResult(m_db.Open(m_dir))) return false;
+    // Automatic placeholder discards also wait for successful deletion before
+    // leaving memory. A busy database must not make rows disappear only in UI.
+    while (!m_PendingDiscards.empty()) {
+        const auto id = *m_PendingDiscards.begin();
+        if (!PersistenceResult(m_db.DeleteRun(id))) return false;
+        m_PendingDiscards.erase(id);
+        for (int i = (int)m_MapRuns.size() - 1; i >= 0; --i)
+            if (m_MapRuns[i].dbId == id) EraseRunAt(i);
+    }
+    const int seconds = SessionActiveSec();
+    for (auto& run : m_MapRuns) {
+        if (run.dbId != 0 && m_DirtyRunIds.find(run.dbId) == m_DirtyRunIds.end()) continue;
+        const auto oldId = run.dbId;
+        if (!m_db.SaveState(&run, seconds, m_CurrentSessionId)) {
+            m_DirtyRunIds.insert(run.dbId);
+            return PersistenceResult(false);
+        }
+        m_DirtyRunIds.erase(oldId);
+        if (oldId == 0) MarkHistoryChanged(true);
+    }
+    if (!PersistenceResult(m_db.SaveState(nullptr, seconds, m_CurrentSessionId))) return false;
+    m_DirtyRunIds.clear();
+    m_MetaDirty = false;
+    m_LastPersistenceError.clear();
+    return true;
 }

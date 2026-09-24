@@ -19,6 +19,7 @@ inline const ImVec4 kDim    = ImVec4(0.70f, 0.70f, 0.70f, 1.0f);  // secondary /
 inline const ImVec4 kHive   = ImVec4(0.78f, 0.45f, 0.95f, 1.0f);  // Hiveblood accent
 inline const ImVec4 kIncur  = ImVec4(0.90f, 0.60f, 0.10f, 1.0f);  // Incursion accent
 inline const ImVec4 kGold   = ImVec4(0.98f, 0.80f, 0.25f, 1.0f);  // Gold counter accent
+inline const ImVec4 kXp     = ImVec4(0.40f, 0.72f, 1.00f, 1.0f);  // experience rate
 inline const ImVec4 kMod    = ImVec4(0.53f, 0.68f, 1.00f, 1.0f);  // map-modifier line (in-game blue)
 
 } // namespace FcTheme
@@ -50,6 +51,18 @@ inline const ImVec4 kMod    = ImVec4(0.53f, 0.68f, 1.00f, 1.0f);  // map-modifie
 #ifndef ICON_FA_COINS
 #define ICON_FA_COINS          "\xef\x94\x9e"  // U+f51e
 #endif
+#ifndef ICON_FA_REPEAT
+#define ICON_FA_REPEAT         "\xef\x8d\xa3"  // U+f363
+#endif
+#ifndef ICON_FA_CIRCLE_CHECK
+#define ICON_FA_CIRCLE_CHECK   "\xef\x81\x98"  // U+f058
+#endif
+#ifndef ICON_FA_PAUSE
+#define ICON_FA_PAUSE          "\xef\x81\x8c"  // U+f04c
+#endif
+#ifndef ICON_FA_PLAY
+#define ICON_FA_PLAY           "\xef\x81\x8b"  // U+f04b
+#endif
 
 // ── Semantic glyph aliases for the FarmCounter overlay/settings ───────────────
 namespace FcGlyph {
@@ -61,4 +74,8 @@ namespace FcGlyph {
     inline constexpr const char* Item    = ICON_FA_GEM;             // item / drop / currency
     inline constexpr const char* Trophy  = ICON_FA_TROPHY;          // best run / record
     inline constexpr const char* Gold    = ICON_FA_COINS;           // character gold counter
+    inline constexpr const char* Visits  = ICON_FA_REPEAT;          // lifetime runs of this map category
+    inline constexpr const char* Completed = ICON_FA_CIRCLE_CHECK;  // completed/archived run
+    inline constexpr const char* Paused = ICON_FA_PAUSE;            // paused run
+    inline constexpr const char* Live = ICON_FA_PLAY;               // live run
 } // namespace FcGlyph

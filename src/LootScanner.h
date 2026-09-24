@@ -16,18 +16,32 @@
 class LootScanner {
 public:
     void SetContext(const PluginSDK::Context* ctx, PriceProvider* prices) { m_ctx = ctx; m_prices = prices; }
+    void SetAreaCounter(uint64_t counter) { m_expectedAreaCounter = counter; m_hasExpectedArea = true; }
     // Drop any in-flight read phase (call on zone change / new session). The
     // throttle timestamp is intentionally NOT reset: a stale m_lastScan only ever
     // lets the next request fire sooner, and the baseline-settle gate (1500ms) and
     // resume path both live in FarmTracker, so timing is unaffected.
-    void ResetTiming() { m_pending = false; }
-    // Returns true and fills `out` when a fresh snapshot was read this call.
+    void ResetTiming(uint64_t baselineStamp = 0) {
+        m_pending = false;
+        if (baselineStamp != 0) m_lastConsumedStamp = baselineStamp;
+    }
+    // Read the latest published, usable backpack without requesting a refresh.
+    // This is the observable inventory boundary for an in-map session reset.
+    // A peek does not consume the token: a failed session transaction must not
+    // hide that scan from the old session. Adopt it through ResetTiming on commit.
+    bool ReadCurrent(std::unordered_map<std::string, InvSnapshot>& out, uint64_t* scanStamp = nullptr);
+    // A supporting host must provide a distinct completed-scan token. Retained
+    // data from a suppressed/coalesced scan request cannot count as a second read.
     bool RequestAndRead(std::unordered_map<std::string, InvSnapshot>& out);
 
 private:
     std::unordered_map<std::string, InvSnapshot> BuildSnapshot(const PluginSDK::Inventory& inv);
+    bool ReadPublished(std::unordered_map<std::string, InvSnapshot>& out, bool requireNew, uint64_t* scanStamp);
     const PluginSDK::Context* m_ctx = nullptr;
     PriceProvider* m_prices = nullptr;
     std::chrono::steady_clock::time_point m_lastScan{};
     bool m_pending = false;
+    uint64_t m_lastConsumedStamp = 0;
+    uint64_t m_expectedAreaCounter = 0;
+    bool m_hasExpectedArea = false;
 };

@@ -9,7 +9,8 @@
 //   * Layout is frozen. To extend without breaking already-built plugins,
 //     APPEND a field/function at the very END of HostAbi (a vtable the host
 //     owns and the plugin only reads). The host advertises HostAbi::size_bytes
-//     and plugins accept any host where size_bytes >= their own sizeof.
+//     and plugins require the prefix they use; optional tail functions must
+//     be size-checked before the function pointer is read.
 //   * NEVER grow a struct the host fills into a plugin-allocated buffer
 //     (anything passed as `T* out`, or embedded by value inside SnapshotAbi):
 //     the host writes its own sizeof and overruns older plugins. Deliver new
@@ -65,6 +66,7 @@ typedef enum {
     PSDK_ENTITY_TYPE_AREA_TRANSITION   = 11,
     PSDK_ENTITY_TYPE_EXPEDITION_MARKER = 12,
     PSDK_ENTITY_TYPE_EXPEDITION_REMNANT = 13,
+    PSDK_ENTITY_TYPE_AZMERI_WISP       = 14,   /* 0.5.5 Azmeri wisp deposit (Flotsam / Wildwood) */
 } PsdkEntityType;
 
 // Finer entity classification (EntityInfoAbi::entity_subtype).
@@ -229,7 +231,7 @@ typedef struct {
     int32_t per_use_charges;
 } ChargesAbi;
 
-// name_addr is a host-owned string (read_string).
+// name_addr is a host-owned UTF-8 string (read_string): the character name.
 typedef struct {
     int32_t  valid;
     uint32_t xp;
@@ -271,7 +273,8 @@ typedef struct {
     uintptr_t states_ptr;
 } StateMachineAbi;
 
-// width/height are the item's grid footprint; base_type_name_addr is host-owned.
+// width/height are the item's grid footprint; base_type_name_addr is a host-owned
+// UTF-8 string (the localized display name; desktop 347+, '?'-narrowed before).
 typedef struct {
     int32_t valid;
     uint8_t width;
@@ -371,7 +374,7 @@ typedef struct {
 // non-monster mods. id/hashes map to the Mods.dat Id/HASH16/HASH32 columns.
 typedef struct {
     uintptr_t id_addr;            // Mods.dat Id, e.g. "MonsterAbyssLightlessFaction1"
-    uintptr_t display_name_addr;  // Mods.dat Name (display), e.g. "Abyssal"
+    uintptr_t display_name_addr;  // Mods.dat Name (display), e.g. "Abyssal"; localized UTF-8
     uintptr_t metadata_addr;      // Mods.dat MonsterMetadata, e.g. "Metadata/.../LightlessWells"
     uint32_t  hash32;             // Mods.dat HASH32, e.g. 0xBFDA2A36
     uint16_t  hash16;             // Mods.dat HASH16, e.g. 0x63D1
@@ -539,6 +542,9 @@ typedef struct {
 // One inventory cell (InventoryService::enumerate_items). slot_x/y are grid
 // coords. screen_* is the on-screen rect for special tabs whose cells aren't a
 // uniform grid; when screen_valid==0 use grid math (grid_screen + slot*cell).
+// base_type_name_addr / unique_name_addr are host-owned UTF-8 strings in the game
+// client's language (desktop 347+; older hosts '?'-narrowed non-ASCII);
+// path_addr is the ASCII metadata path.
 typedef struct {
     uintptr_t address;
     int32_t   slot_x;
@@ -563,7 +569,9 @@ typedef struct {
     int32_t   screen_valid;
 } InventoryItemAbi;
 
-// A belt flask slot (FlasksService). valid==0 for an empty slot.
+// A belt flask slot (FlasksService). valid==0 for an empty slot. name_addr /
+// base_type_addr are host-owned UTF-8 strings in the game client's language
+// (desktop 347+); path_addr is the ASCII metadata path.
 typedef struct {
     int32_t   valid;
     uintptr_t entity_address;
@@ -583,7 +591,8 @@ typedef struct {
     uintptr_t path_addr;
 } FlaskAbi;
 
-// A belt charm slot (FlasksService). valid==0 for an empty slot.
+// A belt charm slot (FlasksService). valid==0 for an empty slot. Strings as in
+// FlaskAbi (localized UTF-8 names, ASCII path).
 typedef struct {
     int32_t   valid;
     uintptr_t entity_address;
@@ -612,7 +621,8 @@ typedef struct {
 } InventoryAbi;
 
 // One mod (enumerate_item_mods). generation_type: 1=prefix 2=suffix 3=implicit.
-// The *_addr fields are host-owned strings.
+// The *_addr fields are host-owned strings: name/stat_key/id are ASCII ids,
+// affix_name is the localized affix name in UTF-8 (desktop 347+).
 typedef struct {
     int32_t generation_type;
     float   value0;
@@ -801,6 +811,8 @@ typedef struct { float x, y, w, h; int32_t ok; } PsdkScreenRectAbi;
 
 // Walk the game's UI tree. follow_path indexes child-by-child from a root;
 // the string getters use the query-then-fill convention (buf=NULL for size).
+// get_string_id and get_text return the element's localized display text as
+// UTF-8 bytes; they do not return the locale-independent control name.
 typedef struct {
     int32_t (*read)(uintptr_t addr, UiElementAbi* out);
     void    (*enumerate_children)(uintptr_t addr, PsdkUiChildVisitorFn cb,
@@ -816,6 +828,9 @@ typedef struct {
     uintptr_t (*get_game_ui_root)(void);
     uintptr_t (*get_ui_root)(void);
     int32_t (*get_cull_value)(void);
+    // string_id is UTF-8 and is compared with each direct child's StringId as
+    // UTF-8 - the form get_string_id / get_text return (desktop 347+; older hosts
+    // compared a '?'-narrowed StringId, so a non-ASCII id never matched).
     uintptr_t (*find_panel_by_string_id)(uintptr_t parent, const char* string_id);
 } UiServiceAbi;
 
@@ -889,7 +904,8 @@ typedef struct {
     int32_t (*charm_slot_count)(void);
 } FlasksServiceAbi;
 
-// Item prices from the host PriceService (poe2scout). lookup_price returns 1
+// Item prices from the host PriceService (poe.ninja by default, poe2scout as the
+// alternative — Settings → Prices). lookup_price returns 1
 // when the name resolved; out fields are in chaos / divine / exalted units.
 typedef struct { int32_t found; float chaos; float divine; float exalt; char category[32]; } PriceResultAbi;
 typedef struct { int32_t loaded; int32_t total_items; float divine_in_chaos;
@@ -1288,6 +1304,45 @@ typedef struct HostAbi {
     // Empty outside a map. stat_row_index = Stats.dat row index; value is the raw
     // final stat value. Append-only tail (2026-07-18, after enumerate_skill_stats).
     void (*enumerate_area_mods)(PsdkAreaModVisitorFn cb, void* userdata);
+
+    // Price database revision. Changes on snapshot publication, selection and
+    // custom-price edits even when currency rates are identical. Zero means
+    // unavailable; older hosts omit this optional tail. Append-only (2026-09-12).
+    uint64_t (*get_prices_revision)(void);
+
+    // One coherent inventory reading, including a genuinely empty inventory.
+    // Metadata, item visitors, scan_stamp and area_counter come from one retained host
+    // publication. Returns 1 only for an actual item scan in that publication's
+    // area; 0 for absent/unread/stale/incomplete data. scan_stamp is an opaque
+    // per-inventory scan token: equality means the same scan, not a fresh read.
+    // All out pointers and cb are required. Strings are valid during each
+    // synchronous callback only. Returning 0 from cb cancels the result.
+    // InventoryAbi and InventoryServiceAbi stay frozen. Append-only (2026-09-13).
+    int32_t (*read_inventory_snapshot)(int32_t inventory_id, InventoryAbi* out,
+                                      uint64_t* scan_stamp, uint64_t* area_counter,
+                                      PsdkInventoryItemVisitorFn cb, void* userdata);
+
+    // format_stat_description in a named GAME language: the item-context text from
+    // the `lang "<language>"` blocks of the host's stat_descriptions.csd, i.e. the
+    // words the game client shows in that language. `language` is a .csd language
+    // name - "English", "French", "German", "Portuguese", "Russian", "Thai",
+    // "Traditional Chinese", "Simplified Chinese", "Spanish", "Korean",
+    // "Japanese" (any ASCII case) - or a short code ("ko", "ru", "zh-CN", "zh-TW",
+    // "pt-BR", ...); NULL or "" means English: format_stat_description's text,
+    // except that loading answers -1 here where that function answers 0.
+    // Same buffer contract: NUL-terminated UTF-8 in `out`, cut on a character
+    // boundary to out_size; returns the length written (excl. NUL). Returns -1
+    // (out = "") while the text is still loading - the host's .csd set, or that
+    // language, which the first request after the set is ready parses in the
+    // background (well under a second): ask again on a later frame and do not
+    // cache the miss. Returns 0 for no text: an unknown language or stat, or a
+    // .csd set that failed to load. A stat without a translation keeps its English
+    // text, and a host that cannot build the language's table at all (no readable
+    // stat_descriptions.csd) answers every stat in English. Optional append-only
+    // tail (desktop 347): size-check before use.
+    int32_t (*format_stat_description_lang)(const char* stat_key, float v0, float v1,
+                                            const char* language,
+                                            char* out, int32_t out_size);
 } HostAbi;
 
 #ifdef __cplusplus

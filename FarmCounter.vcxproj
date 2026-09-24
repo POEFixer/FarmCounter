@@ -90,6 +90,9 @@
     <ClCompile Include="src\Persistence.cpp" />
     <ClCompile Include="src\ResourceReaders.cpp" />
     <ClCompile Include="src\ZoneNames.cpp" />
+    <ClCompile Include="src\StatisticsModel.cpp" />
+    <ClCompile Include="src\ui\StatisticsView.cpp" />
+    <ClCompile Include="src\ui\ZonesView.cpp" />
     <ClCompile Include="src\ui\Overlay.cpp" />
     <ClCompile Include="src\ui\Settings.cpp" />
     <ClCompile Include="lib\sqlite3.c">
@@ -126,9 +129,20 @@
     <ClInclude Include="src\ResourceReaders.h" />
     <ClInclude Include="src\ZoneClassify.h" />
     <ClInclude Include="src\ZoneNames.h" />
+    <ClInclude Include="src\FileIO.h" />
+    <ClInclude Include="src\LootRows.h" />
+    <ClInclude Include="src\MapXpTracker.h" />
+    <ClInclude Include="src\RetryGate.h" />
+    <ClInclude Include="src\StatisticsModel.h" />
+    <ClInclude Include="src\XpTracker.h" />
+    <ClInclude Include="src\ZoneCatalog.generated.h" />
+    <ClInclude Include="src\ZoneCatalog.h" />
     <ClInclude Include="src\ui\Overlay.h" />
     <ClInclude Include="src\ui\Settings.h" />
     <ClInclude Include="src\ui\Theme.h" />
+    <ClInclude Include="src\ui\Formatting.h" />
+    <ClInclude Include="src\ui\StatisticsView.h" />
+    <ClInclude Include="src\ui\ZonesView.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets"></ImportGroup>

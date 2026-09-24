@@ -13,9 +13,13 @@
 #include "ZoneNames.h"
 #include "KillCounter.h"
 #include "ResourceReaders.h"
+#include "XpTracker.h"
+#include "MapXpTracker.h"
+#include "RetryGate.h"
 #include <filesystem>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <chrono>
 
@@ -40,6 +44,14 @@ public:
     void SetPaused(bool paused);
     bool IsPaused() const { return m_Paused; }
 
+    // XP measurement runs independently of farm-history/session resets. The
+    // shell also pauses it on frames where no in-game overlay can be drawn.
+    void UpdateExperience(const PluginSDK::Snapshot& snap);
+    void PauseExperience(bool discardBaseline = false);
+    void ResetExperience();
+    const XpTracker& Experience() const { return m_experience; }
+    const MapXpTracker& MapExperience() const { return m_mapExperience; }
+
     // ── State getters (overlay / settings) ──────────────────────────────────
     bool InMap()          const { return m_InMap; }
     bool BaselineReady()  const { return m_BaselineReady; }
@@ -57,6 +69,10 @@ public:
     int  CurrentSessionId() const { return m_CurrentSessionId; }
     int  ActiveRunIndex()   const { return m_ActiveRunIdx; }   // -1 = none (live run is not deletable)
     bool DbOpen()           const { return m_db.IsOpen(); }
+    const std::string& LastPersistenceError() const { return m_LastPersistenceError; }
+    bool HasUnsavedChanges() const { return m_MetaDirty || !m_DirtyRunIds.empty() || !m_PendingDiscards.empty(); }
+    uint64_t HistoryRevision() const { return m_HistoryRevision; }
+    uint64_t HistoryStructureRevision() const { return m_HistoryStructureRevision; }
     // Gold picked up in the current map run (0 when no live run).
     int  CurrentGoldGain()  const {
         return (m_ActiveRunIdx >= 0 && m_ActiveRunIdx < (int)m_MapRuns.size())
@@ -70,10 +86,10 @@ public:
     int     ItBaseline()    const { return m_ItBaseline; }
 
     // ── Ops (Statistics tab) ────────────────────────────────────────────────
-    void NewSession();
-    void DeleteRunAt(int idx);          // any non-active run (DB + memory)
-    void DeleteArchivedSession(int sessionId);
-    void DeleteAllArchived();
+    bool NewSession();
+    bool DeleteRunAt(int idx);          // any non-active run (DB + memory)
+    bool DeleteArchivedSession(int sessionId);
+    bool DeleteAllArchived();
 
 private:
     void ScanInventory();
@@ -82,7 +98,13 @@ private:
     void FinalizeMapRun();
     void DiscardLiveRun();
     void AccumulateKills(const KillCounter* kills);
-    void Save();  // live-run row + session meta
+    bool Save();  // all dirty rows (including suspended id0 rows) + session meta
+    bool PersistenceResult(bool success);
+    void MarkRunDirty(const MapRun& run);
+    void MarkHistoryChanged(bool structure = false);
+    void PublishHistoryChanges();
+    void EraseRunAt(int idx);
+    static bool HasMeaningfulActivity(const MapRun& run);
 
     // Dependencies
     const PluginSDK::Context* m_ctx     = nullptr;
@@ -100,12 +122,15 @@ private:
     Clock::time_point m_ZoneEnterTime{};
     Clock::time_point m_HideoutEnterTime{};
     Clock::time_point m_LastPeriodicSave{};
+    Core::RetryGate m_MapModRetry;
     std::vector<LootEntry>                       m_LootLog;
     std::vector<LootEntry>                       m_CarryoverLoot;   // loot from previous visits to same map
     std::unordered_map<std::string, InvSnapshot> m_BaselineSnap;
     std::unordered_map<std::string, InvSnapshot> m_BaselineCandidate;
     std::unordered_map<std::string, InvSnapshot> m_LastCurrentSnap; // for the "unpriced items" settings tab
     bool m_BaselineReady = false;
+    bool m_HasBaselineCandidate = false;
+    bool m_HasLastCurrentSnap = false;
     bool m_NeedBaseline  = true;
     bool m_InMap         = false;
     int  m_ActiveRunIdx           = -1;
@@ -122,6 +147,24 @@ private:
     Clock::time_point m_SessionActiveStart{};
     bool              m_SessionTimerRunning = false;
     int               m_CurrentSessionId    = 0;
+    int               m_LastObservedSessionSec = 0;
+    bool              m_HasRuntimeState = false;
+
+    // Failed writes remain in memory and retry; id0 denotes every run still
+    // waiting for its first successful insert, including previous maps.
+    std::unordered_set<int64_t> m_DirtyRunIds;
+    std::unordered_set<int64_t> m_PendingDiscards;
+    bool m_MetaDirty = false;
+    std::string m_LastPersistenceError;
+    Clock::time_point m_LastSaveAttempt{};
+    uint64_t m_HistoryRevision = 0;
+    uint64_t m_HistoryStructureRevision = 0;
+    bool m_HistoryPending = false;
+    Clock::time_point m_LastHistoryPublish{};
+
+    XpTracker         m_experience;
+    MapXpTracker      m_mapExperience;
+    Clock::time_point m_lastExperienceRead{};
 
     // Map run history (persisted to data/farmstats.db via FarmDb)
     std::vector<MapRun> m_MapRuns;

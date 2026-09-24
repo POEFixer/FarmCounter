@@ -52,6 +52,7 @@ enum class EntityType : int32_t {
     AreaTransition    = PSDK_ENTITY_TYPE_AREA_TRANSITION,
     ExpeditionMarker  = PSDK_ENTITY_TYPE_EXPEDITION_MARKER,
     ExpeditionRemnant = PSDK_ENTITY_TYPE_EXPEDITION_REMNANT,
+    AzmeriWisp        = PSDK_ENTITY_TYPE_AZMERI_WISP,
 };
 
 enum class EntitySubtype : int32_t {
@@ -346,7 +347,7 @@ struct Charges {
 };
 
 struct Player {
-    std::string Name;
+    std::string Name;          // character name, UTF-8 (host 347+)
     uint32_t    Xp = 0;
     uint8_t     Level = 0;
     bool        Valid = false;
@@ -428,7 +429,7 @@ struct StateMachine {
 };
 
 struct Base {
-    std::string BaseTypeName;
+    std::string BaseTypeName;   // localized display name, UTF-8 (host 347+; '?' per non-ASCII char before)
     uint8_t     Width = 0;
     uint8_t     Height = 0;
     bool        Valid = false;
@@ -653,9 +654,9 @@ struct ActiveSkill {
 };
 
 struct Mod {
-    std::string Name;
+    std::string Name;          // the first stat key (an ASCII id, not display text)
     std::string StatKey;
-    std::string AffixName;
+    std::string AffixName;     // localized affix name ("of the Ox"), UTF-8 (host 347+)
     std::string Id;            // Mods.dat Id (disambiguates shared stat keys); "" if host predates this field
     uint32_t    Hash32 = 0;    // Mods.dat HASH32 catalog key
     int   GenerationType = 0;
@@ -702,7 +703,7 @@ struct ItemMods {
 // Metadata, or a hash. Metadata is empty for non-monster mods.
 struct MonsterMod {
     std::string Id;        // Mods.dat Id, e.g. "MonsterAbyssLightlessFaction1"
-    std::string Name;      // Mods.dat Name (display), e.g. "Abyssal"
+    std::string Name;      // Mods.dat Name (display), e.g. "Abyssal"; localized UTF-8 (host 347+)
     std::string Metadata;  // Mods.dat MonsterMetadata, e.g. "Metadata/.../LightlessWells"
     uint16_t    Hash16 = 0;          // e.g. 0x63D1
     uint32_t    Hash32 = 0;          // e.g. 0xBFDA2A36
@@ -892,7 +893,10 @@ struct InventoryItem {
     bool      IsCorrupted = false;
     bool      IsCurrency = false;
     int       CraftedModCount = 0;
-    std::string Path;
+    std::string Path;          // Metadata/Items/... (ASCII id)
+    // Localized display names in the game client's language, UTF-8 (host 347+;
+    // older hosts turned every non-ASCII character into '?'). An unidentified
+    // unique is named from its art in English (price-database name).
     std::string BaseTypeName;
     std::string UniqueName;
 
@@ -1030,6 +1034,17 @@ struct Inventory {
         i.Grid.Valid           = a.grid_valid != 0;
         return i;
     }
+};
+
+// Supported=false means an older host omitted the optional callback. Ready=false
+// means there is no usable scan yet; an empty Items vector is authoritative only
+// when Ready=true. ScanStamp identifies the actual scan, not this API invocation.
+struct InventorySnapshot {
+    bool Supported = false;
+    bool Ready = false;
+    uint64_t ScanStamp = 0;
+    uint64_t AreaChangeCounter = 0; // correlate with the GameSnapshot used by the consumer
+    Inventory Value;
 };
 
 // The host-synthesized "currently open Guild Stash tab" inventory (see
@@ -1203,10 +1218,12 @@ struct Snapshot {
     uint64_t    AreaChangeCounter = 0;
     float       WorldToScreenMatrix[16] = {};
 
-    static Snapshot FromAbi(const SnapshotAbi& a, const HostAbi* abi);
+    static Snapshot FromAbi(const SnapshotAbi& a, const HostAbi* abi,
+                            std::optional<EntityType> entityType = std::nullopt);
 };
 
-inline Snapshot Snapshot::FromAbi(const SnapshotAbi& a, const HostAbi* abi) {
+inline Snapshot Snapshot::FromAbi(const SnapshotAbi& a, const HostAbi* abi,
+                                  std::optional<EntityType> entityType) {
     Snapshot s;
     s.State                = static_cast<GameState>(a.game_state);
     s.CurrentAreaLevel     = a.current_area_level;
@@ -1237,11 +1254,16 @@ inline Snapshot Snapshot::FromAbi(const SnapshotAbi& a, const HostAbi* abi) {
         struct Ctx {
             std::vector<Entity>* out;
             const HostAbi*    host;
+            std::optional<EntityType> entityType;
         };
-        Ctx ctx{ &s.Entities, abi };
+        Ctx ctx{ &s.Entities, abi, entityType };
         abi->entities.enumerate(
             [](const EntityInfoAbi* ei, const ComponentAddressesAbi* ca, void* ud) -> int32_t {
                 auto* c = static_cast<Ctx*>(ud);
+                // Filter the POD before materializing strings: a dense loot pile
+                // can contain thousands of entities a monster-only consumer never uses.
+                if (c->entityType && ei->entity_type != static_cast<int32_t>(*c->entityType))
+                    return 1;
                 c->out->push_back(Entity::FromAbi(*ei, *ca, c->host));
                 return 1;
             },
@@ -1265,10 +1287,12 @@ public:
         m_host = host;
     }
 
-    Snapshot GetSnapshot() const {
+    // The optional filter affects only Entities; player/area data is retained.
+    // This is a wrapper-side optimization and requires no new host ABI entry.
+    Snapshot GetSnapshot(std::optional<EntityType> entityType = std::nullopt) const {
         SnapshotAbi raw{};
         if (m_abi && m_abi->get_snapshot) m_abi->get_snapshot(&raw);
-        return Snapshot::FromAbi(raw, m_host);
+        return Snapshot::FromAbi(raw, m_host, entityType);
     }
 
     // Cheap area-change counter WITHOUT the per-entity enumeration that
@@ -1829,6 +1853,37 @@ public:
         if (m_abi && m_abi->scan) m_abi->scan(inventoryId);
     }
 
+    InventorySnapshot ReadSnapshot(int inventoryId) const {
+        InventorySnapshot result;
+        // Do not inspect the tail pointer until its complete byte extent is
+        // present: an older plugin host may end immediately before this field.
+        if (!m_host || m_host->size_bytes < offsetof(HostAbi, read_inventory_snapshot) +
+                sizeof(m_host->read_inventory_snapshot) || !m_host->read_inventory_snapshot)
+            return result;
+        result.Supported = true;
+        InventoryAbi raw{};
+        uint64_t stamp = 0;
+        uint64_t area = 0;
+        struct Ctx { std::vector<InventoryItem> items; const HostAbi* host; } callback{{}, m_host};
+        const int32_t ready = m_host->read_inventory_snapshot(inventoryId, &raw, &stamp, &area,
+            [](const InventoryItemAbi* item, void* userdata) -> int32_t {
+                auto* state = static_cast<Ctx*>(userdata);
+                if (!item) return 0;
+                // Copy strings synchronously while the host retains the exact
+                // publication that owns these item handles.
+                state->items.push_back(InventoryItem::FromAbi(*item, state->host));
+                return 1;
+            }, &callback);
+        if (ready == 1 && stamp != 0 && raw.inventory_id == inventoryId) {
+            result.Ready = true;
+            result.ScanStamp = stamp;
+            result.AreaChangeCounter = area;
+            result.Value = Inventory::FromAbi(raw);
+            result.Value.Items = std::move(callback.items);
+        }
+        return result;
+    }
+
     Inventory Get(int inventoryId) const {
         InventoryAbi raw{};
         if (m_abi && m_abi->get && m_abi->get(inventoryId, &raw)) {
@@ -1883,6 +1938,7 @@ public:
             ? m_abi->read_item_stack_count(entityAddr) : 0;
     }
 
+    // Localized base type / unique name as UTF-8 (host 347+), like InventoryItem.
     std::string ReadItemBaseTypeName(uintptr_t entityAddr) const {
         if (!m_abi || !m_abi->read_item_base_type_name) return {};
         size_t needed = m_abi->read_item_base_type_name(entityAddr, nullptr, 0);
@@ -1964,12 +2020,57 @@ public:
     }
 
     // In-game-style text for a stat key + value(s) via the host .csd formatter
-    // (the same formatting the Debug panel uses). Empty if unavailable.
+    // (the same formatting the Debug panel uses), in English. Empty if unavailable.
     std::string FormatStat(const std::string& statKey, float v0, float v1 = 0.0f) const {
         if (!m_host || !m_host->format_stat_description) return {};
         char buf[256];
         int32_t n = m_host->format_stat_description(statKey.c_str(), v0, v1, buf,
                                                     static_cast<int32_t>(sizeof(buf)));
+        return (n > 0) ? std::string(buf, static_cast<size_t>(n)) : std::string();
+    }
+
+    // FormatStat in a named GAME language, as UTF-8: the words the game client
+    // shows in that language (the host's stat_descriptions.csd `lang` blocks).
+    // `language`: "English", "French", "German", "Portuguese", "Russian", "Thai",
+    // "Traditional Chinese", "Simplified Chinese", "Spanish", "Korean", "Japanese"
+    // (any case) or a short code ("ko", "ru", "zh-CN", "zh-TW", "pt-BR", ...);
+    // nullptr / "" / "English" give FormatStat's text. Empty with *pending = true
+    // while the host is still loading the text (its .csd set, or that language,
+    // parsed in the background on first use): ask again on a later frame and do
+    // not cache that result. Empty with *pending = false: no text - an unknown
+    // language or stat, a host whose .csd set failed to load, a non-English
+    // language on a host older than desktop 347, or (older host, English) the
+    // .csd set still loading there. A stat without a translation keeps its
+    // English text; a host that cannot build the language's table at all answers
+    // every stat in English.
+    std::string FormatStatLocalized(const std::string& statKey, float v0, float v1,
+                                    const char* language, bool* pending = nullptr) const {
+        if (pending) *pending = false;
+        // Tail function: read the pointer only when the host's HostAbi covers it.
+        // Routed through m_host (HostAbi tail), not m_abi (InventoryServiceAbi).
+        if (!m_host || m_host->size_bytes < offsetof(HostAbi, format_stat_description_lang) +
+                sizeof(m_host->format_stat_description_lang) ||
+                !m_host->format_stat_description_lang) {
+            // Older host: the English spellings the new host accepts still get FormatStat.
+            auto isEnglish = [](const char* l) {
+                if (!l || !*l) return true;
+                std::string k;
+                for (; *l; ++l) {
+                    char c = *l;
+                    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+                    k.push_back(c == '_' ? '-' : c);
+                }
+                const size_t b = k.find_first_not_of(" \t\r\n");
+                if (b == std::string::npos) return false;
+                k = k.substr(b, k.find_last_not_of(" \t\r\n") - b + 1);
+                return k == "english" || k == "en" || k == "en-us" || k == "en-gb";
+            };
+            return isEnglish(language) ? FormatStat(statKey, v0, v1) : std::string();
+        }
+        char buf[2048];
+        int32_t n = m_host->format_stat_description_lang(statKey.c_str(), v0, v1, language, buf,
+                                                         static_cast<int32_t>(sizeof(buf)));
+        if (n < 0 && pending) *pending = true;
         return (n > 0) ? std::string(buf, static_cast<size_t>(n)) : std::string();
     }
 
@@ -2522,6 +2623,13 @@ public:
         if (m_abi && m_abi->get_rates) m_abi->get_rates(&r.divineInChaos, &r.exaltedInChaos);
         return r;
     }
+    uint64_t GetRevision() const {
+        // This optional callback extends the previously required host prefix.
+        // Check the complete pointer's extent before accessing an older table.
+        if (!m_host || m_host->size_bytes < offsetof(HostAbi, get_prices_revision) + sizeof(m_host->get_prices_revision))
+            return 0;
+        return m_host->get_prices_revision ? m_host->get_prices_revision() : 0;
+    }
     PriceStatus GetStatus() const {
         PriceStatus s;
         if (m_abi && m_abi->get_status) {
@@ -2771,7 +2879,7 @@ public:
         return seed;
     }
 
-    // Raw eligibility-weight rows. The path-cap stat id is key 26379 (0.5.4).
+    // Raw eligibility-weight rows; stat keys depend on the game build.
     std::vector<AtlasWeight> Weights() const {
         std::vector<AtlasWeight> out;
         if (!m_abi || !m_abi->enumerate_weights) return out;
@@ -3083,7 +3191,8 @@ inline void PluginSDK_AttachHost(PluginSDK::Plugin* p,
     p->m_host_compatible =
         (abi != nullptr
          && abi->version == PLUGIN_SDK_VERSION
-         && abi->size_bytes >= sizeof(HostAbi));
+         // All earlier services remain required; the price revision tail is optional.
+         && abi->size_bytes >= offsetof(HostAbi, get_prices_revision));
     if (!p->m_host_compatible) return;
 
     p->m_ctx.Game      .Init(&abi->game,       abi);

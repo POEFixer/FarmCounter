@@ -1,18 +1,15 @@
 #pragma once
-// Overlay.h — FarmCounter in-game HUD overlay (approved hybrid layout).
+// Overlay.h — FarmCounter in-game HUD overlay.
 //
 // RenderOverlay() draws the non-interactive farming HUD: an accent header bar
 // (map name · timer · profit), a compact stat strip (session · profit/h · kills
 // · maps), inline Hiveblood/Incursion resource bars, and the per-item loot list.
-// It is a behavior-preserving port of the old monolith's DrawUI() overlay window
-// (FarmCounter.cpp:840-1048) re-skinned into the hybrid layout. The function is
-// pure render: it only READS the model/services and writes window/overlay
+// It reads the model/services and writes window/overlay
 // positions back into the (non-const) settings struct — all tracking, baselines
 // and resource reads happen elsewhere (FarmTracker / ResourceReaders).
 //
-// Wiring (FarmCounter DrawUI) is done by a later task; until then RenderOverlay
-// may be unused. The shell is responsible for gating (attach / InGame /
-// WantsOverlay) and for persisting `settings` to disk.
+// The shell gates game state and supplies the cached lifetime map-category
+// count, so drawing that count never rescans the saved history.
 #include "../FarmTracker.h"
 #include "../PriceProvider.h"
 #include "../IconTextures.h"
@@ -43,6 +40,8 @@ struct OverlayDeps {
     //    it must be re-set by the settings renderer each frame it is open.
     bool  settingsOpenThisFrame = false;
     bool* outSettingsConsumed   = nullptr;
+    size_t currentMapLifetimeRuns = 0;
+    const std::string* currentMapCategory = nullptr;
 };
 
 void RenderOverlay(const OverlayDeps& d);

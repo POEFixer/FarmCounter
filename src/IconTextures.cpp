@@ -49,12 +49,19 @@ IconTex IconTextures::LoadPngFile(ID3D11Device* device, const std::wstring& wide
 
 void IconTextures::LoadCurrencyIcons() {
     if (!m_device) return;
+    // Watchdog re-enable does not call OnDisable first. Replace each owning
+    // reference explicitly, preserving reloads when assets or the device change.
     wchar_t exe[MAX_PATH] = {};
     if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
     fs::path base = fs::path(exe).parent_path() / L"Resources" / L"currency" / L"poe2";
-    m_ex    = LoadPngFile(m_device, (base / L"exalted.png").wstring());
-    m_div   = LoadPngFile(m_device, (base / L"divine.png").wstring());
-    m_chaos = LoadPngFile(m_device, (base / L"chaos.png").wstring());
+    auto load = [&](IconTex& tex, const wchar_t* name) {
+        const IconTex replacement = LoadPngFile(m_device, (base / name).wstring());
+        if (tex.srv) reinterpret_cast<ID3D11ShaderResourceView*>(tex.srv)->Release();
+        tex = replacement;
+    };
+    load(m_ex, L"exalted.png");
+    load(m_div, L"divine.png");
+    load(m_chaos, L"chaos.png");
 }
 
 const IconTex& IconTextures::Currency(int idx) const {

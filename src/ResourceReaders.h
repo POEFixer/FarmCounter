@@ -4,13 +4,14 @@
 // Hiveblood comes from the host (ctx()->Game.GetHiveblood — the host maintains the
 // pattern-anchored pointer chain across game patches, so the plugin carries no raw
 // offsets). The Atziri beacon counter ("N / 60" temple-entry resource) is scraped
-// from UI text: a cached element is revalidated every tick and, when stale (area
+// from UI text with the explicit <<incursion_temple_tokens>> marker. A cached
+// element is revalidated every tick and, when stale (area
 // change / game patch moving the panel), re-found with an AMORTIZED bounded BFS
 // over the UI tree instead of a fixed child-index path — fixed paths broke on
 // 0.5.4b and made the counter (and its gain chime) silently die.
 //
 // Each visited element is probed through two string slots: the host's
-// Ui.GetText (StringIdPtr@0x4C0 — the one CE-verified string slot on 0.5.x) and
+// Ui.GetText (the display-text slot maintained by the host) and
 // the legacy display-text StdWString at +0x390 the pre-0.5.4b plugin read. The
 // slot that matched is remembered per cached element, so whichever field the
 // current game build actually renders the counter through, we find it.
@@ -35,21 +36,19 @@ public:
     ItState Incursion() const { return m_it; }  // Atziri beacons (legacy name kept for callers)
     GdState Gold()      const { return m_gd; }  // character gold (host ServerData read)
 
-    // Parses a beacon counter string. Accepted (must END the string, len <= 48):
-    //   quality 2:  "<anything>>> N/60"   (the live UI format)
-    //   quality 1:  "<anything> N/60"     (fallback if a patch drops the ">>")
-    // The cap is pinned to kBeaconCap (60) to reject chat lines / other "N/M"
-    // counters. Public + static so it stays testable without a game.
-    static bool ParseBeaconText(const std::string& text, int& cur, int& maxv, int& quality);
+    // Accepts only "<<incursion_temple_tokens>> N/60" (end-anchored, len <= 48).
+    // Bare "N/60" and other resource markers are not beacon identities.
+    // Public + static so it stays testable without a game.
+    static bool ParseBeaconText(const std::string& text, int& cur, int& maxv);
 
 private:
     void ReadHiveblood(const PluginSDK::Context* ctx);
     void ReadGold(const PluginSDK::Context* ctx);
     void ReadBeacons(const PluginSDK::Context* ctx, bool allowSearch);
     // Probes both string slots of `el`; on match fills cur/max, which slot
-    // (probe: 0 = Ui.GetText, 1 = legacy +0x390) and the match quality.
+    // (probe: 0 = Ui.GetText, 1 = legacy +0x390).
     bool ProbeElement(const PluginSDK::Context* ctx, uintptr_t el,
-                      int& cur, int& maxv, int& probe, int& quality) const;
+                      int& cur, int& maxv, int& probe) const;
     void ResetSearch();
 
     HbState m_hb;
@@ -65,10 +64,6 @@ private:
     std::deque<std::pair<uintptr_t, int>> m_bfsQueue;
     int  m_bfsVisited = 0;
     bool m_bfsActive  = false;
-    // Best bare-quality candidate seen during the current sweep (a ">>"-marked
-    // match wins immediately; this is used only if the sweep ends without one).
-    uintptr_t m_bareElement = 0;
-    int m_bareProbe = 0, m_bareCur = 0, m_bareMax = 0;
 
     std::chrono::steady_clock::time_point m_lastTick{};
     std::chrono::steady_clock::time_point m_lastBeaconSearch{};

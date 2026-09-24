@@ -1,2 +1,2 @@
 #pragma once
-#define ZONETIMER_VERSION "v56"
+#define ZONETIMER_VERSION "v57"
