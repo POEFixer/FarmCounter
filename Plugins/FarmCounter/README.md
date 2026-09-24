@@ -53,19 +53,3 @@ supplies a coherent inventory snapshot with readiness, scan stamp and area
 counter; this distinguishes an empty backpack from unread or stale data.
 Older SDK v6 hosts remain load-compatible, but their conservative fallback
 cannot validate empty inventory readings.
-
-## Build from source
-
-This repository is the plugin folder from the POEFixer source tree (`Plugins/FarmCounter/`) together with the host files it compiles against, kept at the same relative paths:
-
-- `POEFixer/plugin_sdk/` - the POEFixer Plugin SDK v6 headers (`PluginAbi.h`, `PluginSDK.h`)
-- `POEFixer/imgui/` - the Dear ImGui sources the DLL compiles against
-- `POEFixer/core/` - small self-contained helper headers used by the plugin
-
-1. Install Visual Studio 2022 with the "Desktop development with C++" workload (MSVC v143, Windows 10/11 SDK).
-2. Open `FarmCounter.sln`, select **Release | x64** and build the solution.
-3. The plugin is written to `x64\Release\Plugins\FarmCounter\FarmCounter.dll`.
-
-## Install
-
-Copy `FarmCounter.dll` into `Plugins\FarmCounter\` next to the POEFixer executable (create the folder if needed), start POEFixer and enable the plugin in the Plugins tab.

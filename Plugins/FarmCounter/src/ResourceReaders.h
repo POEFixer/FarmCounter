@@ -15,7 +15,7 @@
 // the legacy display-text StdWString at +0x390 the pre-0.5.4b plugin read. The
 // slot that matched is remembered per cached element, so whichever field the
 // current game build actually renders the counter through, we find it.
-#include "sdk/PluginSDK.h"
+#include "../../../POEFixer/plugin_sdk/PluginSDK.h"
 #include <chrono>
 #include <cstdint>
 #include <deque>

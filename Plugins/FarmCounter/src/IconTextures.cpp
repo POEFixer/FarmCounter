@@ -9,7 +9,7 @@
 #define STBI_ONLY_PNG
 #define STBI_NO_SIMD
 #define STBI_NO_STDIO
-#include <stb_image.h>
+#include "../../../POEFixer/imgui/stb_image.h"
 
 namespace fs = std::filesystem;
 

@@ -6,7 +6,7 @@
 // the host when no inventory panel is visible (visibility gate), so loot stopped
 // accruing with the backpack closed. A targeted id-1 scan ("id >= 0 always read")
 // bypasses the gate and is also cheaper (one inventory vs. ~15).
-#include "sdk/PluginSDK.h"
+#include "../../../POEFixer/plugin_sdk/PluginSDK.h"
 #include "FarmTypes.h"
 #include "PriceProvider.h"
 #include <unordered_map>

@@ -1,6 +1,6 @@
 #include "ZoneNames.h"
 #include "ZoneCatalog.h"
-#include "FileIO.h"
+#include "../../../POEFixer/core/FileIO.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <string>

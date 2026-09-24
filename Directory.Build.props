@@ -1,0 +1,9 @@
+<Project>
+  <!-- Build with the 64-bit-hosted MSVC tools. The default 32-bit-hosted compiler and
+       linker can run out of address space on the larger plugins (whole-program
+       optimisation), which shows up as internal compiler errors or garbage-character
+       errors in system headers. -->
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+</Project>

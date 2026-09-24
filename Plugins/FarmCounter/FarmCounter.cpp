@@ -4,7 +4,7 @@
 // instances, wires them together, and dispatches the SDK lifecycle hooks.
 // Pricing flows through the host price service (ctx()->Prices via PriceProvider),
 // so the plugin makes zero HTTP calls and owns no price database.
-#include "sdk/PluginSDK.h"
+#include "../../POEFixer/plugin_sdk/PluginSDK.h"
 #include <imgui.h>
 #include "version.h"
 

@@ -12,7 +12,7 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
-    <ProjectGuid>{B2C3D4E5-6789-4F01-BCDE-222222222222}</ProjectGuid>
+    <ProjectGuid>{09786386-485A-46EC-B71D-DF6287696DB0}</ProjectGuid>
     <RootNamespace>FarmCounter</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -33,13 +33,13 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings"></ImportGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(ProjectDir)bin\$(Configuration)\</OutDir>
-    <IntDir>$(ProjectDir)obj\$(Configuration)\</IntDir>
+    <OutDir>$(SolutionDir)x64\Release\Plugins\FarmCounter\</OutDir>
+    <IntDir>$(Configuration)\</IntDir>
     <TargetName>FarmCounter</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(ProjectDir)bin\$(Configuration)\</OutDir>
-    <IntDir>$(ProjectDir)obj\$(Configuration)\</IntDir>
+    <OutDir>$(SolutionDir)x64\Debug\Plugins\FarmCounter\</OutDir>
+    <IntDir>$(Configuration)\</IntDir>
     <TargetName>FarmCounter</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -54,7 +54,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExceptionHandling>Sync</ExceptionHandling>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk;$(ProjectDir)imgui;$(ProjectDir)lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\POEFixer;..\..\POEFixer\imgui;lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -73,7 +73,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ExceptionHandling>Sync</ExceptionHandling>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sdk;$(ProjectDir)imgui;$(ProjectDir)lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\POEFixer;..\..\POEFixer\imgui;lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -105,21 +105,23 @@
       <SDLCheck Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</SDLCheck>
       <SDLCheck Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</SDLCheck>
     </ClCompile>
-    <ClCompile Include="imgui\imgui.cpp" />
-    <ClCompile Include="imgui\imgui_draw.cpp" />
-    <ClCompile Include="imgui\imgui_tables.cpp" />
-    <ClCompile Include="imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\..\POEFixer\imgui\imgui.cpp" />
+    <ClCompile Include="..\..\POEFixer\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\..\POEFixer\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\..\POEFixer\imgui\imgui_widgets.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="sdk\PluginAbi.h" />
-    <ClInclude Include="sdk\PluginSDK.h" />
+    <ClInclude Include="..\..\POEFixer\plugin_sdk\PluginAbi.h" />
+    <ClInclude Include="..\..\POEFixer\plugin_sdk\PluginSDK.h" />
     <ClInclude Include="version.h" />
     <ClInclude Include="lib\sqlite3.h" />
-    <ClInclude Include="lib\sqlite3-vcpkg-config.h" />
     <ClInclude Include="lib\nlohmann\json.hpp" />
     <ClInclude Include="src\FarmDb.h" />
     <ClInclude Include="src\FarmTypes.h" />
     <ClInclude Include="src\FarmTracker.h" />
+    <ClInclude Include="src\XpTracker.h" />
+    <ClInclude Include="src\MapXpTracker.h" />
+    <ClInclude Include="src\LootRows.h" />
     <ClInclude Include="src\IconTextures.h" />
     <ClInclude Include="src\KillCounter.h" />
     <ClInclude Include="src\LootDiff.h" />
@@ -129,20 +131,15 @@
     <ClInclude Include="src\ResourceReaders.h" />
     <ClInclude Include="src\ZoneClassify.h" />
     <ClInclude Include="src\ZoneNames.h" />
-    <ClInclude Include="src\FileIO.h" />
-    <ClInclude Include="src\LootRows.h" />
-    <ClInclude Include="src\MapXpTracker.h" />
-    <ClInclude Include="src\RetryGate.h" />
-    <ClInclude Include="src\StatisticsModel.h" />
-    <ClInclude Include="src\XpTracker.h" />
-    <ClInclude Include="src\ZoneCatalog.generated.h" />
     <ClInclude Include="src\ZoneCatalog.h" />
-    <ClInclude Include="src\ui\Overlay.h" />
-    <ClInclude Include="src\ui\Settings.h" />
-    <ClInclude Include="src\ui\Theme.h" />
-    <ClInclude Include="src\ui\Formatting.h" />
+    <ClInclude Include="src\ZoneCatalog.generated.h" />
+    <ClInclude Include="src\StatisticsModel.h" />
     <ClInclude Include="src\ui\StatisticsView.h" />
     <ClInclude Include="src\ui\ZonesView.h" />
+    <ClInclude Include="src\ui\Overlay.h" />
+    <ClInclude Include="src\ui\Formatting.h" />
+    <ClInclude Include="src\ui\Settings.h" />
+    <ClInclude Include="src\ui\Theme.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets"></ImportGroup>

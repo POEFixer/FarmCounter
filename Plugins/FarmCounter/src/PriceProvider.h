@@ -9,7 +9,7 @@
 //      chaos at lookup via the live exalt rate)
 //   2. Host price DB (fuzzy host-side match; LootScanner applies the
 //      IsUniqueCategory rarity gate on top)
-#include "sdk/PluginSDK.h"
+#include "../../../POEFixer/plugin_sdk/PluginSDK.h"
 #include <string>
 #include <unordered_map>
 #include <algorithm>

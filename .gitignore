@@ -1,9 +1,11 @@
+# Build output (Visual Studio / MSBuild)
+x64/
+Release/
+Debug/
 bin/
 obj/
-x64/
 .vs/
 *.user
-*.sdf
-*.opensdf
-*.suo
 *.aps
+*.ipch
+*.VC.db

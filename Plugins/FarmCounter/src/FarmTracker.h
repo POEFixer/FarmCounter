@@ -5,7 +5,7 @@
 // SQLite persistence (FarmDb). Owns a LootScanner + FarmDb; consumes
 // PriceProvider, ZoneNames and KillCounter; reads the throttled Hb/It states
 // passed into OnFrame.
-#include "sdk/PluginSDK.h"
+#include "../../../POEFixer/plugin_sdk/PluginSDK.h"
 #include "FarmTypes.h"
 #include "FarmDb.h"
 #include "LootScanner.h"
@@ -15,7 +15,7 @@
 #include "ResourceReaders.h"
 #include "XpTracker.h"
 #include "MapXpTracker.h"
-#include "RetryGate.h"
+#include "../../../POEFixer/core/RetryGate.h"
 #include <filesystem>
 #include <vector>
 #include <unordered_map>
