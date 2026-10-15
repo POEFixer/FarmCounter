@@ -54,14 +54,17 @@ void IconTextures::LoadCurrencyIcons() {
     wchar_t exe[MAX_PATH] = {};
     if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
     fs::path base = fs::path(exe).parent_path() / L"Resources" / L"currency" / L"poe2";
-    auto load = [&](IconTex& tex, const wchar_t* name) {
-        const IconTex replacement = LoadPngFile(m_device, (base / name).wstring());
+    // The host names its icons by display name since desktop 356; an older host's code-named
+    // file is the fallback (an updated install keeps both).
+    auto load = [&](IconTex& tex, const wchar_t* name, const wchar_t* oldName) {
+        IconTex replacement = LoadPngFile(m_device, (base / name).wstring());
+        if (!replacement.valid) replacement = LoadPngFile(m_device, (base / oldName).wstring());
         if (tex.srv) reinterpret_cast<ID3D11ShaderResourceView*>(tex.srv)->Release();
         tex = replacement;
     };
-    load(m_ex, L"exalted.png");
-    load(m_div, L"divine.png");
-    load(m_chaos, L"chaos.png");
+    load(m_ex, L"Exalted Orb.png", L"exalted.png");
+    load(m_div, L"Divine Orb.png", L"divine.png");
+    load(m_chaos, L"Chaos Orb.png", L"chaos.png");
 }
 
 const IconTex& IconTextures::Currency(int idx) const {

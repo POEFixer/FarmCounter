@@ -45,8 +45,11 @@ game patches.
 ## Saved data and host compatibility
 
 History lives in `data/farmstats.db`; settings and custom prices live under
-`config/`. Keep these files when replacing the plugin DLL. Database write errors
-are shown in Statistics; a failed reset/delete keeps the previous state.
+`config/`. Keep these files when replacing the plugin DLL. While the overlay
+runs, `farmstats.db-wal` and `farmstats.db-shm` sit next to `farmstats.db`; keep
+the three together (or close the overlay first) when you copy the data folder.
+Database write errors are shown in Statistics; a failed reset/delete keeps the
+previous state.
 
 Use the matching updated Fixer executable and FarmCounter DLL. The current host
 supplies a coherent inventory snapshot with readiness, scan stamp and area

@@ -134,6 +134,14 @@ bool FarmDb::Open(const std::filesystem::path& pluginDir) {
         ExecSql(m_db, "PRAGMA foreign_keys = ON;");
         { Stmt pragma(m_db, "PRAGMA foreign_keys;");
           if (!pragma.Step() || pragma.Int(0) != 1) throw std::runtime_error("Cannot enable farm database foreign keys"); }
+        // Write-ahead log with synchronous=NORMAL: a commit appends to the log instead of
+        // flushing a rollback journal and the database (the periodic save runs on the
+        // render thread). Where WAL is refused (a filesystem without shared-memory support)
+        // the default journal and synchronous=FULL stay, and Open still succeeds.
+        bool wal = false;
+        try { Stmt journal(m_db, "PRAGMA journal_mode = WAL;"); wal = journal.Step() && journal.Text(0) == "wal"; }
+        catch (const std::exception&) {}
+        if (wal) ExecSql(m_db, "PRAGMA synchronous = NORMAL;");
         Transaction transaction(m_db, true);
         CreateTables();
         transaction.Commit();
@@ -149,6 +157,12 @@ bool FarmDb::Open(const std::filesystem::path& pluginDir) {
 
 void FarmDb::Close() {
     if (m_db) { sqlite3_close_v2(m_db); m_db = nullptr; }
+}
+
+int FarmDb::SynchronousLevel() const {
+    if (!m_db) return -1;
+    try { Stmt pragma(m_db, "PRAGMA synchronous;"); return pragma.Step() ? pragma.Int(0) : -1; }
+    catch (const std::exception&) { return -1; }
 }
 
 template<class Action> bool FarmDb::Execute(Action&& action, bool write) {

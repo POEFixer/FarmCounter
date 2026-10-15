@@ -16,7 +16,7 @@ class IconTextures {
 public:
     ~IconTextures() { Release(); }
     void SetDevice(ID3D11Device* dev) { m_device = dev; }
-    void LoadCurrencyIcons();                       // ex/div/chaos from Resources/currency/poe2
+    void LoadCurrencyIcons();                       // ex/div/chaos from Resources/currency/poe2 ("<Name> Orb.png", else the old "<code>.png")
     void LoadRadarAtlas();                          // monster rarity icons from Resources/radar
     const IconTex& Currency(int overlayCurrencyIdx) const;  // 0=ex,1=div,2=chaos
     // Radar monster icon by rarity (0=Normal 1=Magic 2=Rare 3=Unique); .valid

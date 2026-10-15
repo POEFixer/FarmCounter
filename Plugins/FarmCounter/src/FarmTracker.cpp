@@ -722,6 +722,7 @@ bool FarmTracker::Save() {
             if (m_MapRuns[i].dbId == id) EraseRunAt(i);
     }
     const int seconds = SessionActiveSec();
+    bool metaSaved = false;   // every run SaveState also writes the session meta
     for (auto& run : m_MapRuns) {
         if (run.dbId != 0 && m_DirtyRunIds.find(run.dbId) == m_DirtyRunIds.end()) continue;
         const auto oldId = run.dbId;
@@ -729,10 +730,12 @@ bool FarmTracker::Save() {
             m_DirtyRunIds.insert(run.dbId);
             return PersistenceResult(false);
         }
+        metaSaved = true;
         m_DirtyRunIds.erase(oldId);
         if (oldId == 0) MarkHistoryChanged(true);
     }
-    if (!PersistenceResult(m_db.SaveState(nullptr, seconds, m_CurrentSessionId))) return false;
+    // The meta-only commit is needed only when no run save above wrote the same values.
+    if (!metaSaved && !PersistenceResult(m_db.SaveState(nullptr, seconds, m_CurrentSessionId))) return false;
     m_DirtyRunIds.clear();
     m_MetaDirty = false;
     m_LastPersistenceError.clear();

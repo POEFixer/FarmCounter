@@ -24,6 +24,9 @@ public:
     void Close();
     bool IsOpen() const { return m_db != nullptr; }
     const std::string& LastError() const { return m_lastError; }
+    // Diagnostic for tools/farm_counter_persistence_test: PRAGMA synchronous on THIS
+    // connection (a per-connection setting; 1 = NORMAL, 2 = FULL), -1 when closed or unreadable.
+    int SynchronousLevel() const;
 
     // Loads every run (oldest first, loot attached) + session meta. sessionIdMax
     // is raised to the highest session id seen (high-water mark, never lowered).
