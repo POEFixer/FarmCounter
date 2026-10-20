@@ -25,6 +25,7 @@
 #include "Theme.h"
 #include "Formatting.h"
 #include "../LootRows.h"
+#include "../ZoneClassify.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -298,7 +299,7 @@ void RenderOverlay(const OverlayDeps& d) {
         }
     }
 
-    const bool  inHideout = tr.CurrentZone().find("Hideout") != std::string::npos;
+    const bool  inHideout = ClassifyZone(tr.CurrentZone()).isHideout;
     const bool  inMap     = tr.InMap();
     const bool  baseReady = tr.BaselineReady();
     const float lineH     = ImGui::GetTextLineHeight();

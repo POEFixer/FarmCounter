@@ -370,7 +370,7 @@ void FarmTracker::OnFrame(const PluginSDK::Snapshot& snap,
 
     // ── Session active-time: pause after >60s continuously in hideout, resume on
     //    leaving hideout. ─────────────────────────────────────────────────────
-    bool inHideout = m_CurrentZone.find("Hideout") != std::string::npos;
+    bool inHideout = ClassifyZone(m_CurrentZone).isHideout;
     if (inHideout) {
         auto hideoutSec = std::chrono::duration_cast<std::chrono::seconds>(
             Clock::now() - m_HideoutEnterTime).count();

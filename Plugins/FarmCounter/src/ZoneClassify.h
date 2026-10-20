@@ -22,7 +22,8 @@ inline ZoneKind ClassifyZone(const std::string& n) {
             n.starts_with("ExpeditionSubArea_");
         return k;
     }
-    k.isHideout     = has("Hideout");
+    // MapHideout*_Claimable are combat areas (WorldAreas IsHideout = 0).
+    k.isHideout     = has("Hideout") && !has("_Claimable");
     if (k.isHideout) return k;
     k.isPassThrough = has("Abyss") || has("abyss") || has("Delirium_HungerBoss");
     k.isMap = !k.isHideout && (
