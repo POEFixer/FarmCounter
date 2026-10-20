@@ -2960,7 +2960,7 @@ public:
         m_host = host;
     }
 
-    // Host-resolved trial panel (GameUI child[84], floor-obj gated);
+    // Host-resolved trial panel (the trial panel under GameUI, floor-object gated);
     // 0 = absent / controller mode / not in game.
     uintptr_t GetPanel() const {
         return (m_abi && m_abi->get_panel) ? m_abi->get_panel() : 0;

@@ -1084,8 +1084,8 @@ typedef struct {
     uintptr_t row_addr;         // DAT row object (identity/change signal)
     uintptr_t table_addr;       // DAT table object
     char      table_path[128];  // in-memory .dat table path ("" unreadable)
-    char      row_id[96];       // row Id (row+0x00; e.g. "Caverns_Arena_03")
-    char      row_name[160];    // display name (row+0x28; localized)
+    char      row_id[96];       // the row's Id string (e.g. "Caverns_Arena_03")
+    char      row_name[160];    // the row's display name (localized)
 } SekhemaContentFkAbi;
 
 // One content entry: which (layer, room) it decorates + its FK pairs. The
@@ -1106,8 +1106,8 @@ typedef struct {
     // --- APPEND ONLY: add new functions at the END, never reorder. Valid only
     //     while `HostAbi::sekhema` stays the LAST HostAbi member; after that the
     //     struct is frozen — extend via new HostAbi tail functions instead. ---
-    // Host-resolved trial panel (GameUI child[84], gated on a non-null floor-obj
-    // pointer). 0 = absent / controller mode / not in game.
+    // Host-resolved trial panel (the trial panel under GameUI, gated on a
+    // non-null floor-object pointer). 0 = absent / controller mode / not in game.
     uintptr_t (*get_panel)(void);
     // Cheap probe (~6 reads): does ui_addr resolve a FloorData whose layer
     // vector counts in [1, 64]? Returns the layer count, 0 = not a trial floor.
@@ -1297,8 +1297,8 @@ typedef struct HostAbi {
                                   PsdkSkillStatVisitorFn cb, void* userdata);
 
     // Area/map modifiers — the rendered area-info panel lines (map mods). Host
-    // reads the AreaInstance stat containers (A@+0x138 final values ∩ B@+0x158
-    // membership) and renders each via the generated Stats.dat/.csd template
+    // reads the AreaInstance's two map-stat containers (final values in one ∩
+    // membership in the other) and renders each via the generated Stats.dat/.csd template
     // table (GameLibrary MapModTemplates). Visitor delivers one display line per
     // call, in panel order; `text` is valid only for the duration of the call.
     // Empty outside a map. stat_row_index = Stats.dat row index; value is the raw

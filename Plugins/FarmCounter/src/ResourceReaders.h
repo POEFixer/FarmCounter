@@ -10,11 +10,8 @@
 // over the UI tree instead of a fixed child-index path — fixed paths broke on
 // 0.5.4b and made the counter (and its gain chime) silently die.
 //
-// Each visited element is probed through two string slots: the host's
-// Ui.GetText (the display-text slot maintained by the host) and
-// the legacy display-text StdWString at +0x390 the pre-0.5.4b plugin read. The
-// slot that matched is remembered per cached element, so whichever field the
-// current game build actually renders the counter through, we find it.
+// Each visited element is read through the host's Ui.GetText service, whose
+// runtime profile owns the game-build layout.
 #include "../../../POEFixer/plugin_sdk/PluginSDK.h"
 #include <chrono>
 #include <cstdint>
@@ -45,8 +42,7 @@ private:
     void ReadHiveblood(const PluginSDK::Context* ctx);
     void ReadGold(const PluginSDK::Context* ctx);
     void ReadBeacons(const PluginSDK::Context* ctx, bool allowSearch);
-    // Probes both string slots of `el`; on match fills cur/max, which slot
-    // (probe: 0 = Ui.GetText, 1 = legacy +0x390).
+    // Reads semantic host text; probe remains zero for the existing cache state.
     bool ProbeElement(const PluginSDK::Context* ctx, uintptr_t el,
                       int& cur, int& maxv, int& probe) const;
     void ResetSearch();

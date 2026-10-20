@@ -13,10 +13,6 @@ static constexpr char kBeaconMarker[] = "<<incursion_temple_tokens>>";
 // Counter strings are short; anything longer is chat/log text.
 static constexpr size_t kBeaconMaxTextLen = 48;
 
-// Legacy display-text StdWString offset on the UI element (what the pre-0.5.4b
-// plugin read). Probed in addition to the host's Ui.GetText slot — see header.
-static constexpr uintptr_t kLegacyTextOffset = 0x390;
-
 // The live beacon follows more than 9000 nodes when large hidden UI collections
 // are loaded. The larger total bound must not increase a frame's read budget:
 // the sweep remains AMORTIZED at kBeaconNodesPerTick per ~150ms tick.
@@ -93,23 +89,10 @@ bool ResourceReaders::ParseBeaconText(const std::string& text,
 
 bool ResourceReaders::ProbeElement(const PluginSDK::Context* c, uintptr_t el,
                                    int& cur, int& maxv, int& probe) const {
-    // Probe 0: the display-text slot maintained by the host.
-    {
-        const std::string txt = c->Ui.GetText(el);
-        if (ParseBeaconText(txt, cur, maxv)) { probe = 0; return true; }
-    }
-    // Probe 1: the legacy display-text slot the pre-0.5.4b plugin read. Garbage
-    // memory yields an empty/unparsable string, so this is safe on any element.
-    {
-        const std::wstring ws = c->Memory.ReadStdWString(el + kLegacyTextOffset);
-        if (!ws.empty() && ws.size() <= kBeaconMaxTextLen) {
-            std::string txt;
-            txt.reserve(ws.size());
-            for (wchar_t wc : ws) txt.push_back(wc < 0x80 ? (char)wc : '?');
-            if (ParseBeaconText(txt, cur, maxv)) { probe = 1; return true; }
-        }
-    }
-    return false;
+    // The semantic service follows the host's admitted memory profile. Bundled
+    // plugins carry no game-build fallback or public offset table.
+    probe = 0;
+    return ParseBeaconText(c->Ui.GetText(el), cur, maxv);
 }
 
 void ResourceReaders::ResetSearch() {
