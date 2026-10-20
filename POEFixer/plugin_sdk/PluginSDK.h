@@ -879,6 +879,85 @@ struct TgtLocation {
     }
 };
 
+// One generated room of the current area (TerrainService::GetAreaRooms): the
+// AreaGraph rooms the host Radar matches its room targets (room_targets.json
+// RoomPattern) against. Grid units are the ones the walkable grid, IsWalkable
+// and entity grid positions use.
+struct AreaRoom {
+    std::string Name;            // room resource path, UTF-8, e.g.
+                                 // "Metadata/Terrain/Gallows/Act1/1_11/Rooms/Ritual_02.arm"
+    int   MinTileX = 0;          // tile bounds as the game stores them; one tile
+    int   MinTileY = 0;          // spans 23 grid cells, so the room covers grid
+    int   MaxTileX = 0;          // MinTile * 23 .. MaxTile * 23 on each axis
+    int   MaxTileY = 0;
+    float GridX = 0;             // room centre in grid cells: the Radar's room-target
+    float GridY = 0;             // point before it snaps to a walkable cell
+                                 // (the centre itself may be unwalkable)
+    uint32_t GraphIndex = 0;     // which area graph / which room in it
+    uint32_t RoomIndex = 0;
+
+    // The Radar's RoomPattern rule: the WHOLE name must match, ASCII case is
+    // ignored, '*' matches any run of characters (also none); there is no other
+    // wildcard. An empty (or NULL) pattern matches nothing. No allocation.
+    bool Matches(const char* pattern) const {
+        return pattern && *pattern && MatchPattern(Name.c_str(), pattern);
+    }
+    bool Matches(const std::string& pattern) const { return Matches(pattern.c_str()); }
+
+    static bool MatchPattern(const char* name, const char* pattern) {
+        if (!name || !pattern) return false;
+        auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; };
+        const char* s = name;
+        const char* p = pattern;
+        const char* starS = nullptr;   // name position the last '*' resumes from
+        const char* starP = nullptr;   // pattern position after the last '*'
+        while (*s) {
+            if (*p == '*') {
+                while (*p == '*') ++p;
+                if (!*p) return true;
+                starP = p;
+                starS = s;
+            } else if (lower(*s) == lower(*p)) {
+                ++s;
+                ++p;
+            } else if (starP) {
+                s = ++starS;
+                p = starP;
+            } else {
+                return false;
+            }
+        }
+        while (*p == '*') ++p;
+        return *p == '\0';
+    }
+
+    static AreaRoom FromAbi(const AreaRoomAbi& a) {
+        AreaRoom r;
+        r.Name       = a.name ? a.name : "";
+        r.MinTileX   = a.min_tile_x;
+        r.MinTileY   = a.min_tile_y;
+        r.MaxTileX   = a.max_tile_x;
+        r.MaxTileY   = a.max_tile_y;
+        r.GridX      = a.grid_x;
+        r.GridY      = a.grid_y;
+        r.GraphIndex = a.graph_index;
+        r.RoomIndex  = a.room_index;
+        return r;
+    }
+};
+
+// TerrainService::GetAreaRooms result.
+struct AreaRooms {
+    bool     Supported = false;  // false: the host predates this call (Rooms empty)
+    bool     Ready = false;      // Rooms is the current area's list (may be empty);
+                                 // false while not in game, loading, or while the
+                                 // host is still reading the area's rooms
+    uint64_t Revision = 0;       // nonzero names this published list and is never
+                                 // reused for another one while the host runs;
+                                 // 0 whenever Ready is false
+    std::vector<AreaRoom> Rooms;
+};
+
 struct InventoryItem {
     uintptr_t Address = 0;
     int       SlotX = 0;
@@ -1372,20 +1451,42 @@ public:
         return m_host && m_host->get_hiveblood && m_host->get_hiveblood(&out) != 0;
     }
 
-    // One rendered area/map modifier line.
-    struct AreaMod { uint32_t statRowIndex = 0; int32_t value = 0; std::string text; };
+    // One rendered area/map modifier line. statRowIndex is the game's runtime
+    // stat key (Stats.dat row index + 1, the numbering EnumerateSkillStats uses);
+    // it moves when a patch inserts Stats.dat rows. statId is the Stats.dat Id
+    // ("map_item_drop_rarity_+%"), a string that stays the same from patch to
+    // patch: match on it. Text and Id come from the same row of the host's
+    // map-mod table, so after a patch that inserts Stats.dat rows both are right
+    // once the host is updated for it. statId is empty on a host older than the
+    // enumerate_area_mods_ex tail.
+    struct AreaMod { uint32_t statRowIndex = 0; int32_t value = 0; std::string text; std::string statId; };
 
     // Area/map modifiers — the rendered area-info panel lines ("27% increased
     // Rarity of Items found in this Area"), in panel order. Empty outside a map
     // or on a host that predates the tail function. Routed via the HostAbi
-    // top-level pointer (append-only tail; not a GameServiceAbi member).
+    // top-level pointers (append-only tail; not GameServiceAbi members).
     std::vector<AreaMod> GetAreaMods() const {
         std::vector<AreaMod> out;
-        if (!m_host || !m_host->enumerate_area_mods) return out;
+        if (!m_host) return out;
+        // Optional tail with the Stats.dat Id: read the pointer only when the
+        // host's HostAbi covers it, else fall back to the older call below.
+        if (m_host->size_bytes >= offsetof(HostAbi, enumerate_area_mods_ex) +
+                sizeof(m_host->enumerate_area_mods_ex) && m_host->enumerate_area_mods_ex) {
+            m_host->enumerate_area_mods_ex(
+                [](const AreaModAbi* m, void* ud) -> int32_t {
+                    if (!m) return 1;
+                    static_cast<std::vector<AreaMod>*>(ud)->push_back({ m->stat_row_index, m->value,
+                        m->text ? std::string(m->text) : std::string(),
+                        m->stat_id ? std::string(m->stat_id) : std::string() });
+                    return 1;
+                }, &out);
+            return out;
+        }
+        if (!m_host->enumerate_area_mods) return out;
         m_host->enumerate_area_mods(
             [](uint32_t rid, int32_t val, const char* text, void* ud) -> int32_t {
                 auto* v = static_cast<std::vector<AreaMod>*>(ud);
-                v->push_back({ rid, val, text ? std::string(text) : std::string() });
+                v->push_back({ rid, val, text ? std::string(text) : std::string(), std::string() });
                 return 1;
             }, &out);
         return out;
@@ -2335,6 +2436,9 @@ public:
         return HeightGridHandle{ raw };
     }
 
+    // One grid cell of the walkable grid. Hosts older than GetAreaRooms
+    // (AreaRooms::Supported == false) read the wrong byte here; on those,
+    // decode GetWalkableGrid() instead.
     bool IsWalkable(int gridX, int gridY) const {
         return m_abi && m_abi->is_walkable && m_abi->is_walkable(gridX, gridY) != 0;
     }
@@ -2360,6 +2464,48 @@ public:
                 return (*p->cb)(TgtLocation::FromAbi(*loc, p->host)) ? 1 : 0;
             },
             &c);
+    }
+
+    // The current area's generated rooms (see AreaRoom), copied from one host
+    // publication. Ready == false while not in game, loading, or while the host
+    // is still reading the area's rooms: the area's rooms are not known yet, so
+    // do not keep using an older list; ask again later. Supported == false on a
+    // host older than this call. To copy only when the list changes, keep the
+    // last result and refresh it when GetAreaRoomsRevision() != its Revision.
+    // Routed through m_host (HostAbi tail), not m_abi (TerrainServiceAbi).
+    AreaRooms GetAreaRooms() const {
+        AreaRooms result;
+        // Tail function: read the pointer only when the host's HostAbi covers it.
+        if (!m_host || m_host->size_bytes < offsetof(HostAbi, enumerate_area_rooms) +
+                sizeof(m_host->enumerate_area_rooms) || !m_host->enumerate_area_rooms)
+            return result;
+        result.Supported = true;
+        const int32_t ready = m_host->enumerate_area_rooms(
+            [](const AreaRoomAbi* room, void* ud) -> int32_t {
+                if (room) static_cast<std::vector<AreaRoom>*>(ud)->push_back(AreaRoom::FromAbi(*room));
+                return 1;
+            },
+            &result.Rooms, &result.Revision);
+        result.Ready = ready != 0;
+        if (!result.Ready) {
+            result.Rooms.clear();
+            result.Revision = 0;
+        }
+        return result;
+    }
+
+    // Revision of the host's room list without copying it (no allocation):
+    // GetAreaRooms().Revision, i.e. 0 while the list is not ready and on a host
+    // older than GetAreaRooms. `ready` (optional) receives GetAreaRooms().Ready.
+    uint64_t GetAreaRoomsRevision(bool* ready = nullptr) const {
+        if (ready) *ready = false;
+        if (!m_host || m_host->size_bytes < offsetof(HostAbi, enumerate_area_rooms) +
+                sizeof(m_host->enumerate_area_rooms) || !m_host->enumerate_area_rooms)
+            return 0;
+        uint64_t revision = 0;
+        const int32_t isReady = m_host->enumerate_area_rooms(nullptr, nullptr, &revision);
+        if (ready) *ready = isReady != 0;
+        return isReady != 0 ? revision : 0;
     }
 };
 

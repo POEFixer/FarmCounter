@@ -703,6 +703,41 @@ typedef int32_t (*PsdkModVisitorFn)(const ModAbi* mod, PsdkModKind mod_kind, voi
 // a host-owned UTF-8 string valid only during the callback — copy it to keep it.
 typedef int32_t (*PsdkAreaModVisitorFn)(uint32_t stat_row_index, int32_t value,
                                         const char* text, void* userdata);
+
+// One area/map modifier line with its stat identity (HostAbi::enumerate_area_mods_ex).
+// Both strings are host-owned and valid only during the callback — copy to keep.
+// Frozen: new per-mod data comes through a new HostAbi tail function.
+typedef struct {
+    uint32_t    stat_row_index;  // runtime stat key = Stats.dat row index + 1 (the
+                                 // numbering enumerate_skill_stats uses); moves when
+                                 // a patch inserts Stats.dat rows
+    int32_t     value;           // raw final stat value
+    const char* text;            // rendered panel line, UTF-8
+    const char* stat_id;         // Stats.dat Id ("map_item_drop_rarity_+%"), ASCII,
+                                 // never NULL ("" if unknown); the string stays the
+                                 // same across patches. Text and Id come from the
+                                 // same row of the host's map-mod table
+} AreaModAbi;
+typedef int32_t (*PsdkAreaModExVisitorFn)(const AreaModAbi* mod, void* userdata);
+
+// One generated room of the current area (HostAbi::enumerate_area_rooms): the
+// AreaGraph rooms the host Radar matches its room targets (room_targets.json
+// RoomPattern) against. `name` is host-owned and valid only during the callback.
+// Frozen: new per-room data comes through a new HostAbi tail function.
+typedef struct {
+    const char* name;            // room resource path, UTF-8, e.g.
+                                 // "Metadata/Terrain/Gallows/Act1/1_11/Rooms/Ritual_02.arm"
+    int32_t     min_tile_x;      // tile bounds as the game stores them; one tile
+    int32_t     min_tile_y;      // spans 23 grid cells, so the room covers grid
+    int32_t     max_tile_x;      // min_tile * 23 .. max_tile * 23 on each axis
+    int32_t     max_tile_y;      // (the rectangle the Radar's room picker draws)
+    float       grid_x;          // room centre in grid cells, (min + max) / 2 * 23:
+    float       grid_y;          // the Radar's room-target point before it snaps
+                                 // to a walkable cell; may itself be unwalkable
+    uint32_t    graph_index;     // which area graph / which room in it; with the
+    uint32_t    room_index;      // name and bounds this identifies the room
+} AreaRoomAbi;
+typedef int32_t (*PsdkAreaRoomVisitorFn)(const AreaRoomAbi* room, void* userdata);
 typedef int32_t (*PsdkBuffVisitorFn)(const BuffAbi* buff, void* userdata);
 typedef int32_t (*PsdkActiveSkillVisitorFn)(const ActiveSkillAbi* s, void* userdata);
 typedef int32_t (*PsdkStatVisitorFn)(int32_t key, int32_t value, PsdkStatSource source_kind, void* userdata);
@@ -851,6 +886,9 @@ typedef struct {
 typedef struct {
     void  (*get_walkable_grid)(WalkableGridHandleAbi* out);
     void  (*get_height_grid)(HeightGridHandleAbi* out);
+    // One grid cell of the packed walkable grid (1 = walkable). Hosts that
+    // predate enumerate_area_rooms read the wrong byte; on those, decode
+    // get_walkable_grid instead.
     int32_t (*is_walkable)(int32_t gx, int32_t gy);
     float (*get_terrain_height)(int32_t gx, int32_t gy);
     float (*get_world_to_grid_convertor)(void);
@@ -1301,8 +1339,10 @@ typedef struct HostAbi {
     // membership in the other) and renders each via the generated Stats.dat/.csd template
     // table (GameLibrary MapModTemplates). Visitor delivers one display line per
     // call, in panel order; `text` is valid only for the duration of the call.
-    // Empty outside a map. stat_row_index = Stats.dat row index; value is the raw
-    // final stat value. Append-only tail (2026-07-18, after enumerate_skill_stats).
+    // Empty outside a map. stat_row_index = the runtime stat key (Stats.dat row
+    // index + 1, see AreaModAbi); value is the raw final stat value. For the
+    // stat's Stats.dat Id string use enumerate_area_mods_ex. Append-only tail
+    // (2026-07-18, after enumerate_skill_stats).
     void (*enumerate_area_mods)(PsdkAreaModVisitorFn cb, void* userdata);
 
     // Price database revision. Changes on snapshot publication, selection and
@@ -1343,6 +1383,28 @@ typedef struct HostAbi {
     int32_t (*format_stat_description_lang)(const char* stat_key, float v0, float v1,
                                             const char* language,
                                             char* out, int32_t out_size);
+
+    // Generated rooms of the current area (AreaGraph, read on every area by the
+    // host): one AreaRoomAbi per named room, in graph/room order, from one
+    // retained host publication. Returns 1 when the list is ready - every room
+    // was visited, or cb returned 0 to stop - and 0 when it is not (not in game,
+    // loading, still being read after an area change, or unreadable on this
+    // area); a ready list may be empty. cb may be NULL to ask readiness and the
+    // revision alone. *revision (may be NULL) is always written: nonzero names
+    // one published list and is never reused for another list while the host
+    // runs, 0 whenever the call returns 0; a plugin can keep its copy until the
+    // value changes. A faulting cb ends the walk and the call returns 0.
+    // Unnamed rooms are not listed. Optional append-only tail (after
+    // format_stat_description_lang): size-check before use.
+    int32_t (*enumerate_area_rooms)(PsdkAreaRoomVisitorFn cb, void* userdata,
+                                    uint64_t* revision);
+
+    // enumerate_area_mods with each line's Stats.dat Id string (AreaModAbi):
+    // the same lines in the same order from the same host data. The Id comes
+    // from the host's generated map-mod table, the same row that rendered the
+    // line, so it is as current as the text. Empty outside a map. Optional
+    // append-only tail (after enumerate_area_rooms): size-check before use.
+    void (*enumerate_area_mods_ex)(PsdkAreaModExVisitorFn cb, void* userdata);
 } HostAbi;
 
 #ifdef __cplusplus
