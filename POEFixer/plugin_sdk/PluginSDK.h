@@ -1066,6 +1066,87 @@ struct AreaRooms {
     std::vector<AreaRoom> Rooms;
 };
 
+// How UiService::FindElements compares an element (PSDK_UI_MATCH_*).
+enum class UiMatchKind : int32_t {
+    ControlName       = PSDK_UI_MATCH_CONTROL_NAME,         // control name == text
+    ControlNamePrefix = PSDK_UI_MATCH_CONTROL_NAME_PREFIX,  // control name starts with text
+    StringId          = PSDK_UI_MATCH_STRING_ID,            // localized display text == text
+};
+
+// OverlayService::SetEntityScanFlags bits (PSDK_SCAN_*), OR-combined.
+namespace EntityScan {
+inline constexpr uint32_t IncludeSleeping = PSDK_SCAN_INCLUDE_SLEEPING;  // + sleeping map, decoration ids
+inline constexpr uint32_t StashObjects    = PSDK_SCAN_STASH_OBJECTS;     // keep GameService::EnumerateStashObjects' list
+}
+
+// Which stash (PSDK_STASH_DOMAIN_*).
+enum class StashDomain : int32_t {
+    Own   = PSDK_STASH_DOMAIN_OWN,     // the player's own stash
+    Guild = PSDK_STASH_DOMAIN_GUILD,   // the guild stash
+};
+
+// One stash object of the current area (GameService::EnumerateStashObjects).
+struct StashObject {
+    uint32_t    EntityId = 0;
+    StashDomain Domain = StashDomain::Own;
+    int         Rank = 0;            // 2 = the domain's unskinned object (Stash / GuildStash),
+                                     // 1 = another stash of the domain (a skin, an affinity or pet stash)
+    float       WorldX = 0, WorldY = 0, WorldZ = 0;
+    float       GridX = 0, GridY = 0;
+    uintptr_t   EntityAddress = 0;   // game entity base, 0 when unknown
+    std::string Path;                // metadata path
+
+    static StashObject FromAbi(const StashObjectAbi& a) {
+        StashObject o;
+        o.EntityId      = a.entity_id;
+        o.Domain        = static_cast<StashDomain>(a.domain);
+        o.Rank          = a.rank;
+        o.WorldX        = a.world_x;
+        o.WorldY        = a.world_y;
+        o.WorldZ        = a.world_z;
+        o.GridX         = a.grid_x;
+        o.GridY         = a.grid_y;
+        o.EntityAddress = a.entity_address;
+        o.Path          = a.path ? a.path : "";
+        return o;
+    }
+};
+
+// One tab of an open stash panel, or the control that opens its tab list
+// (GameService::EnumerateStashTabs).
+struct StashTab {
+    int         Index = -1;          // position in the tab list (0-based); -1 for the toggle
+    int         IsActive = -1;       // 1 the selected tab, 0 not, -1 the host cannot tell
+    bool        OnScreen = false;    // X/Y/W/H is a visible, clickable rect
+    float       X = 0, Y = 0, W = 0, H = 0;   // client pixels (filled whenever known)
+    std::string Name;                // the user's tab name, UTF-8
+
+    float CenterX() const { return X + W * 0.5f; }
+    float CenterY() const { return Y + H * 0.5f; }
+
+    static StashTab FromAbi(const StashTabAbi& a) {
+        StashTab t;
+        t.Index    = a.index;
+        t.IsActive = a.is_active;
+        t.OnScreen = a.on_screen != 0;
+        t.X = a.x; t.Y = a.y; t.W = a.w; t.H = a.h;
+        t.Name     = a.name ? a.name : "";
+        return t;
+    }
+};
+
+// GameService::EnumerateStashTabs result.
+struct StashTabList {
+    bool Supported = false;   // false: the host predates EnumerateStashTabs (Status -2)
+    int  Status = -2;         // >= 0: the panel is open, Status tabs listed;
+                              // -1: that panel is not open (or not in game);
+                              // -2: this host does not support the domain
+    std::vector<StashTab> Tabs;
+    StashTab Toggle;          // the control that opens a collapsed tab list;
+                              // OnScreen == false when the host cannot name it
+    bool IsOpen() const { return Status >= 0; }
+};
+
 struct InventoryItem {
     uintptr_t Address = 0;
     int       SlotX = 0;
@@ -1598,6 +1679,71 @@ public:
                 return 1;
             }, &out);
         return out;
+    }
+
+    // ---- Optional tail (desktop 365+): stash objects, stash tabs, host automation.
+    // These live on the HostAbi tail, so they are reached through m_host (never
+    // m_abi: GameServiceAbi is frozen), and each pointer is read only when the
+    // host's HostAbi covers it (size_bytes); the Has*() checks say so up front.
+
+    bool HasStashObjects() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, enumerate_stash_objects) +
+                   sizeof(m_host->enumerate_stash_objects) && m_host->enumerate_stash_objects;
+    }
+
+    // The current area's stash objects (own and guild), rank 2 first. Needs
+    // ctx()->Overlay.SetEntityScanFlags(EntityScan::StashObjects) (by this or
+    // another plugin): std::nullopt while nobody requests it, before the host
+    // built the list (the first host tick after the request, loading, not in
+    // game) and on a host older than this call. An empty vector is a real
+    // answer: no stash object in this area.
+    std::optional<std::vector<StashObject>> EnumerateStashObjects() const {
+        if (!HasStashObjects()) return std::nullopt;
+        std::vector<StashObject> objects;
+        const int32_t n = m_host->enumerate_stash_objects(
+            [](const StashObjectAbi* o, void* ud) -> int32_t {
+                if (o) static_cast<std::vector<StashObject>*>(ud)->push_back(StashObject::FromAbi(*o));
+                return 1;
+            }, &objects);
+        if (n < 0) return std::nullopt;
+        return objects;
+    }
+
+    bool HasStashTabs() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, enumerate_stash_tabs) +
+                   sizeof(m_host->enumerate_stash_tabs) && m_host->enumerate_stash_tabs;
+    }
+
+    // The tabs of the OPEN stash panel of `domain`, in tab-list order (see
+    // StashTabList). A tab whose list entry is hidden takes the rect of its
+    // visible button-strip twin when there is one; click CenterX/CenterY of a tab
+    // with OnScreen. Toggle.OnScreen says the host can open a collapsed list.
+    StashTabList EnumerateStashTabs(StashDomain domain) const {
+        StashTabList result;
+        if (!HasStashTabs()) return result;
+        result.Supported = true;
+        StashTabAbi toggle{};
+        result.Status = m_host->enumerate_stash_tabs(static_cast<int32_t>(domain),
+            [](const StashTabAbi* t, void* ud) -> int32_t {
+                if (t) static_cast<std::vector<StashTab>*>(ud)->push_back(StashTab::FromAbi(*t));
+                return 1;
+            }, &result.Tabs, &toggle);
+        result.Toggle = StashTab::FromAbi(toggle);
+        if (result.Status < 0) result.Tabs.clear();
+        return result;
+    }
+
+    bool HasHostAutomationFlag() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, get_host_automation_active) +
+                   sizeof(m_host->get_host_automation_active) && m_host->get_host_automation_active;
+    }
+
+    // True while host automation drives the game's input (crafting, which also
+    // suppresses plugin inventory scans; memory-mode trade and Manual Buy; the
+    // auto-stash trip; trade recovery; the lobby auto-login): a plugin that drives
+    // input should hold still. False on a host older than this call.
+    bool IsHostAutomationActive() const {
+        return HasHostAutomationFlag() && m_host->get_host_automation_active() != 0;
     }
 };
 
@@ -2412,6 +2558,57 @@ public:
         return (m_abi && m_abi->find_panel_by_string_id)
             ? m_abi->find_panel_by_string_id(parent, stringId) : 0;
     }
+
+    // ---- Optional tail (desktop 365+): control names and UI search. Both live on
+    // the HostAbi tail, so they are reached through m_host (never m_abi:
+    // UiServiceAbi is frozen), and each pointer is read only when the host's
+    // HostAbi covers it (size_bytes); HasControlNames / HasFindElements say so.
+    using MatchKind = UiMatchKind;
+
+    bool HasControlNames() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, ui_get_control_name) +
+                   sizeof(m_host->ui_get_control_name) && m_host->ui_get_control_name;
+    }
+
+    // The element's locale-independent control name ("death_screen",
+    // "respawn_button"), the same in every client language; "" when it has none,
+    // the address is unreadable or the host predates this call. GetStringId /
+    // GetText return the LOCALIZED display text instead.
+    std::string GetControlName(uintptr_t addr) const {
+        if (!HasControlNames() || addr == 0) return {};
+        char stackBuf[128];
+        const size_t n = m_host->ui_get_control_name(addr, stackBuf, sizeof(stackBuf));
+        if (n == 0) return {};
+        if (n < sizeof(stackBuf)) return std::string(stackBuf, n);
+        std::vector<char> big(n + 1, '\0');
+        if (m_host->ui_get_control_name(addr, big.data(), big.size()) == 0) return {};
+        return std::string(big.data());   // a name that changed between the calls stays cut
+    }
+
+    bool HasFindElements() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, ui_find_elements) +
+                   sizeof(m_host->ui_find_elements) && m_host->ui_find_elements;
+    }
+
+    // Breadth-first search below `root` (0 = GetGameUiRoot()), root included, for
+    // elements matching `text` by `match`: shallowest first, at most maxResults.
+    // visibleOnly: the element and every ancestor up to root must be visible.
+    // maxDepth is clamped to 32 and the host reads at most 4000 elements per
+    // call. Empty on no match, an empty text or a host older than this call.
+    // e.g. FindElements(0, "death_screen", UiMatchKind::ControlName, 12, true, 1).
+    std::vector<uintptr_t> FindElements(uintptr_t root, const std::string& text,
+                                        UiMatchKind match = UiMatchKind::ControlName,
+                                        int maxDepth = 12, bool visibleOnly = true,
+                                        int maxResults = 16) const {
+        std::vector<uintptr_t> out;
+        if (!HasFindElements() || text.empty() || maxResults <= 0 || maxDepth < 0) return out;
+        if (maxResults > 4000) maxResults = 4000;   // the host's node budget
+        out.resize(static_cast<size_t>(maxResults));
+        const int32_t found = m_host->ui_find_elements(root, text.c_str(), static_cast<int32_t>(match),
+                                                       maxDepth, visibleOnly ? 1 : 0, out.data(), maxResults);
+        out.resize(found > 0 ? static_cast<size_t>(found < maxResults ? found : maxResults) : 0u);
+        return out;
+    }
 };
 
 // Project world/grid coordinates to screen and to the large/mini map.
@@ -2778,6 +2975,26 @@ public:
         if (m_abi && m_abi->set_wants_overlay_input) {
             m_abi->set_wants_overlay_input(m_plugin_token, enable ? 1 : 0);
         }
+    }
+
+    // Optional tail (desktop 365+): reached through m_host (OverlayServiceAbi is
+    // frozen), the pointer read only when the host's HostAbi covers it.
+    bool HasEntityScanFlags() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, set_entity_scan_flags) +
+                   sizeof(m_host->set_entity_scan_flags) && m_host->set_entity_scan_flags;
+    }
+
+    // This plugin's wider entity scan (EntityScan::* bits; 0 drops it). Auto-
+    // cleared on disable / unload; clear it yourself when you no longer need it,
+    // the sleeping scan costs the host a fuller entity walk.
+    //   IncludeSleeping: the entity list also carries the sleeping map
+    //     (Entity::IsSleeping) and decoration ids; Useless entities still need
+    //     SetIncludeSleepingEntities.
+    //   StashObjects: GameService::EnumerateStashObjects answers (implies
+    //     IncludeSleeping).
+    // No-op on a host older than this call.
+    void SetEntityScanFlags(uint32_t flags) const {
+        if (HasEntityScanFlags()) m_host->set_entity_scan_flags(m_plugin_token, flags);
     }
 };
 

@@ -671,8 +671,11 @@ typedef struct {
     uintptr_t path_addr;
 } TgtLocationAbi;
 
-// Owning view over a walkable-grid snapshot (1 byte/cell). Call release(opaque)
-// (the C++ wrapper does this for you) before the next snapshot/area change.
+// Owning view over a walkable-grid snapshot. The buffer is 4-bit packed, two
+// cells per byte: row gy starts at gy * (width / 2), an even gx is the low
+// nibble and an odd gx the high one, non-zero = walkable; `width` counts cells
+// (two per byte), `height` rows. Call release(opaque) (the C++ wrapper does
+// this for you) before the next snapshot/area change.
 typedef struct {
     const uint8_t* data;
     int32_t width;
@@ -738,6 +741,53 @@ typedef struct {
     uint32_t    room_index;      // name and bounds this identifies the room
 } AreaRoomAbi;
 typedef int32_t (*PsdkAreaRoomVisitorFn)(const AreaRoomAbi* room, void* userdata);
+
+// ui_find_elements match kinds (HostAbi::ui_find_elements).
+#define PSDK_UI_MATCH_CONTROL_NAME        0   // control name == text
+#define PSDK_UI_MATCH_CONTROL_NAME_PREFIX 1   // control name starts with text
+#define PSDK_UI_MATCH_STRING_ID           2   // localized StringId == text
+
+// set_entity_scan_flags bits (HostAbi::set_entity_scan_flags), OR-combined.
+#define PSDK_SCAN_INCLUDE_SLEEPING 0x1u   // also read the sleeping map and the decoration ids
+#define PSDK_SCAN_STASH_OBJECTS    0x2u   // keep the stash-object list (implies INCLUDE_SLEEPING)
+
+// Stash domains (StashObjectAbi::domain, enumerate_stash_tabs).
+#define PSDK_STASH_DOMAIN_OWN   0   // the player's own stash (Metadata/MiscellaneousObjects/Stash...)
+#define PSDK_STASH_DOMAIN_GUILD 1   // the guild stash (.../GuildStash...)
+
+// One stash object of the current area (HostAbi::enumerate_stash_objects), from
+// the host's stash-object list: every entity whose path names a stash of either
+// domain, those the entity list drops (invalid flag) included. `path` is
+// host-owned and valid only during the callback. Frozen: new per-object data
+// comes through a new HostAbi tail function.
+typedef struct StashObjectAbi {
+    uint32_t    entity_id;
+    int32_t     domain;          // PSDK_STASH_DOMAIN_OWN / _GUILD
+    int32_t     rank;            // 2 = the domain's unskinned object (Stash / GuildStash),
+                                 // 1 = another stash of the domain (a skin, an affinity or
+                                 // a pet stash); objects arrive rank 2 first
+    float       world_x, world_y, world_z;
+    float       grid_x, grid_y;  // world / world-to-grid ratio
+    uintptr_t   entity_address;  // game entity base (0 when unknown)
+    const char* path;            // ASCII metadata path, e.g.
+                                 // "Metadata/MiscellaneousObjects/StashSkins/FairgravesGuildStash"
+} StashObjectAbi;
+typedef int32_t (*PsdkStashObjectVisitorFn)(const StashObjectAbi* obj, void* userdata);
+
+// One tab of an open stash panel (HostAbi::enumerate_stash_tabs), or the
+// control that opens the tab list (its list_toggle out parameter). `name` is
+// host-owned and valid only during the callback (the toggle's is a static "").
+// Frozen: the toggle form is filled into a plugin-owned buffer.
+typedef struct StashTabAbi {
+    int32_t     index;           // position in the tab list (0-based); -1 for the toggle
+    int32_t     is_active;       // 1 the selected tab, 0 not, -1 the host cannot tell
+    int32_t     on_screen;       // 1 when x/y/w/h is a visible, clickable on-screen rect
+    float       x, y, w, h;      // client pixels, like UiService::compute_screen_rect;
+                                 // filled whenever the host could compute it (also
+                                 // with on_screen 0), else all 0
+    const char* name;            // UTF-8 user tab name
+} StashTabAbi;
+typedef int32_t (*PsdkStashTabVisitorFn)(const StashTabAbi* tab, void* userdata);
 typedef int32_t (*PsdkBuffVisitorFn)(const BuffAbi* buff, void* userdata);
 typedef int32_t (*PsdkActiveSkillVisitorFn)(const ActiveSkillAbi* s, void* userdata);
 typedef int32_t (*PsdkStatVisitorFn)(int32_t key, int32_t value, PsdkStatSource source_kind, void* userdata);
@@ -1405,6 +1455,77 @@ typedef struct HostAbi {
     // line, so it is as current as the text. Empty outside a map. Optional
     // append-only tail (after enumerate_area_rooms): size-check before use.
     void (*enumerate_area_mods_ex)(PsdkAreaModExVisitorFn cb, void* userdata);
+
+    // Locale-independent control name of a UI element (the engine's internal
+    // name, e.g. "death_screen", "respawn_button", "NPCBuyWindow"), as UTF-8.
+    // Unlike get_string_id / get_text (the LOCALIZED display text) it reads the
+    // same in every client language; a button usually has a control name and no
+    // text, its child label the text and no control name. Returns the full
+    // length in bytes (excluding the NUL), 0 when unreadable or empty; when buf
+    // and buf_size are non-zero writes at most buf_size - 1 bytes (cut on a
+    // UTF-8 character boundary) plus a NUL. Optional append-only tail (after
+    // enumerate_area_mods_ex): size-check before use.
+    size_t (*ui_get_control_name)(uintptr_t element, char* buf, size_t buf_size);
+
+    // Breadth-first search below `root` (0 = the in-game UI root, what
+    // UiService::get_game_ui_root returns), root included at depth 0, for the
+    // elements whose match_kind (PSDK_UI_MATCH_*) holds against `text` (UTF-8,
+    // non-empty): 0 control name == text, 1 control name starts with text,
+    // 2 localized StringId == text. visible_only != 0: the element AND every
+    // ancestor up to and including root must be visible (invisible subtrees
+    // are skipped whole). Bounded by max_depth (clamped to 32) and a node
+    // budget of 4000 elements. Writes up to out_cap addresses into out in BFS
+    // order (shallowest first) and returns how many matched within the budget,
+    // which may exceed out_cap; -1 on bad arguments (text NULL or empty, an
+    // unknown match_kind, max_depth < 0, out_cap < 0, out NULL with out_cap > 0).
+    // out may be NULL with out_cap 0 to count. Optional append-only tail (after
+    // ui_get_control_name): size-check before use.
+    int32_t (*ui_find_elements)(uintptr_t root, const char* text, int32_t match_kind,
+                                int32_t max_depth, int32_t visible_only,
+                                uintptr_t* out, int32_t out_cap);
+
+    // Wider entity scan for THIS plugin (plugin_token as in OverlayServiceAbi;
+    // per plugin, OR-aggregated over plugins, cleared when the plugin is
+    // disabled or unloaded). flags = PSDK_SCAN_* bits, unknown bits ignored,
+    // 0 drops the request.
+    //   PSDK_SCAN_INCLUDE_SLEEPING: the host's entity reader also reads the
+    //     sleeping-entity map (published with is_sleeping = 1) and the awake
+    //     map's decoration ids (>= 0x40000000); costs a fuller entity walk while
+    //     any plugin holds it. Entities in the Useless state stay governed by
+    //     OverlayServiceAbi::set_include_sleeping_entities.
+    //   PSDK_SCAN_STASH_OBJECTS: the reader keeps the stash-object list for
+    //     enumerate_stash_objects (implies PSDK_SCAN_INCLUDE_SLEEPING).
+    // Optional append-only tail (after ui_find_elements): size-check before use.
+    void (*set_entity_scan_flags)(void* plugin_token, uint32_t flags);
+
+    // The current area's stash objects (StashObjectAbi), rank 2 objects first,
+    // from one host publication. Returns the number visited (cb may be NULL to
+    // count only); -1 while no plugin requests PSDK_SCAN_STASH_OBJECTS or the
+    // list is not built yet (the first host tick after the request, not in
+    // game, loading). Objects without a known position are left out. A
+    // faulting cb ends the walk; the visits before it are counted. Optional
+    // append-only tail (after set_entity_scan_flags): size-check before use.
+    int32_t (*enumerate_stash_objects)(PsdkStashObjectVisitorFn cb, void* userdata);
+
+    // Tabs of the OPEN stash panel of `domain` (PSDK_STASH_DOMAIN_*), in tab-list
+    // order. Returns the number visited (cb may be NULL to count only); -1 when
+    // that panel is not open (or not in game); -2 when this host does not
+    // support the domain. A tab whose list entry is hidden (a collapsed tab
+    // list) takes the rect of its visible button-strip twin when there is one;
+    // tabs nobody can see report on_screen 0. list_toggle (may be NULL) is
+    // always written: the control that opens a collapsed tab list, on_screen 1
+    // only when the host can name it (index -1, is_active -1, name ""). A
+    // faulting cb ends the walk; the visits before it are counted. Optional
+    // append-only tail (after enumerate_stash_objects): size-check before use.
+    int32_t (*enumerate_stash_tabs)(int32_t domain, PsdkStashTabVisitorFn cb, void* userdata,
+                                    StashTabAbi* list_toggle);
+
+    // 1 while host automation drives the game's input, else 0: the crafting
+    // automation (it also suppresses plugin inventory scans meanwhile), memory-mode
+    // trade and Manual Buy, the auto-stash trip / dump / refill, trade recovery and
+    // the lobby auto-login. A plugin that drives input should hold still while it is 1.
+    // Optional append-only tail (after enumerate_stash_tabs): size-check before use.
+    int32_t (*get_host_automation_active)(void);
 } HostAbi;
 
 /* ===========================================================================
