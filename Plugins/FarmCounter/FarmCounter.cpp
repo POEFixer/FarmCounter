@@ -6,7 +6,6 @@
 // so the plugin makes zero HTTP calls and owns no price database.
 #include "../../POEFixer/plugin_sdk/PluginSDK.h"
 #include <imgui.h>
-#include "version.h"
 
 #include "src/FarmTypes.h"
 #include "src/PriceProvider.h"
@@ -109,7 +108,7 @@ public:
         m_icons.LoadRadarAtlas();   // radar monster icons for the kill counter
         m_tracker.Init(ctx(), &m_prices, &m_zones, m_dir);  // Init BEFORE OnEnable
         m_tracker.OnEnable();                               // OnEnable loads the map history
-        ctx()->Log.Info("FarmCounter " ZONETIMER_VERSION " enabled");
+        ctx()->Log.Info((std::string("FarmCounter ") + PluginSDK_GetInfo()->version + " enabled").c_str());
     }
 
     void OnDisable() override {
@@ -218,3 +217,11 @@ extern "C" PLUGIN_API PluginSDK::Plugin* CreatePlugin() {
 extern "C" PLUGIN_API void DestroyPlugin(PluginSDK::Plugin* p) {
     delete p;
 }
+
+// Plugin info: the host checks it before CreatePlugin; the publish tool reads it.
+POEFIXER_PLUGIN_INFO(
+    "FarmCounter",
+    "Farm Counter",
+    "1.0.0",
+    "POEFixer",
+    "Records your map runs: loot value, map time, kills, gold and XP per hour, with run history and statistics per map type.")

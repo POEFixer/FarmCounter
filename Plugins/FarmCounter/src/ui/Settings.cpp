@@ -14,7 +14,6 @@
 #include "ZonesView.h"
 #include "Theme.h"
 #include "Formatting.h"
-#include "../../version.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -56,9 +55,6 @@ struct DangerButtonColors {
 void DrawSettingsTab(const SettingsDeps& d) {
     OverlaySettings& s = *d.settings;
     auto save = [&] { SaveSettings(d.dir, s); };
-
-    ImGui::Text("FarmCounter %s", ZONETIMER_VERSION);
-    ImGui::Spacing();
 
     ImGui::SeparatorText("Overlay");
     if (ImGui::Checkbox("Enable Overlay Mode", &s.wantsOverlay))      save();

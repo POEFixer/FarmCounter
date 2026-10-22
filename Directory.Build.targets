@@ -1,0 +1,22 @@
+<Project>
+  <!-- Release builds carry no debug information: the compiler writes no PDB and the
+       linker writes no PDB path into the DLL, so the published DLL names no folder of
+       the machine that built it. /d1trimfile strips the solution folder from __FILE__
+       (assert messages and the like keep only repository-relative paths). Debug builds
+       are unchanged. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <DebugInformationFormat>None</DebugInformationFormat>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release' and '$(SolutionDir)' != '' and '$(SolutionDir)' != '*Undefined*'">
+    <ClCompile>
+      <AdditionalOptions>"/d1trimfile:$(SolutionDir.TrimEnd('\'))" %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <Link>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>

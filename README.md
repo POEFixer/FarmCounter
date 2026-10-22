@@ -1,5 +1,9 @@
 # FarmCounter
 
+Current version: 1.0.0
+
+Requires POE2Fixer 364 or newer.
+
 FarmCounter records map runs, signed loot changes, prices, map time, kills,
 gold, Hiveblood and Atziri beacons. XP/hour and current-map XP are independent
 overlay measurements.
@@ -57,18 +61,19 @@ counter; this distinguishes an empty backpack from unread or stale data.
 Older SDK v6 hosts remain load-compatible, but their conservative fallback
 cannot validate empty inventory readings.
 
+## Install
+
+Install it from POE2Fixer → Plugins → Plugin Manager (one click, updates included), or download `FarmCounter.zip` from [Releases](https://github.com/POEFixer/FarmCounter/releases/latest) and extract it into the POE2Fixer folder (it creates `Plugins\FarmCounter\`). Then enable the plugin in the Plugins tab.
+
 ## Build from source
 
-This repository is the plugin folder from the POEFixer source tree (`Plugins/FarmCounter/`) together with the host files it compiles against, kept at the same relative paths:
+This repository is the plugin folder from the POE2Fixer source tree (`Plugins/FarmCounter/`) together with the host files it compiles against, kept at the same relative paths:
 
-- `POEFixer/plugin_sdk/` - the POEFixer Plugin SDK v6 headers (`PluginAbi.h`, `PluginSDK.h`)
+- `POEFixer/plugin_sdk/` - the POE2Fixer Plugin SDK v6 headers (`PluginAbi.h`, `PluginSDK.h`)
 - `POEFixer/imgui/` - the Dear ImGui sources the DLL compiles against
 - `POEFixer/core/` - small self-contained helper headers used by the plugin
 
 1. Install Visual Studio 2022 with the "Desktop development with C++" workload (MSVC v143, Windows 10/11 SDK).
 2. Open `FarmCounter.sln`, select **Release | x64** and build the solution.
-3. The plugin is written to `x64\Release\Plugins\FarmCounter\FarmCounter.dll`.
-
-## Install
-
-Copy `FarmCounter.dll` into `Plugins\FarmCounter\` next to the POEFixer executable (create the folder if needed), start POEFixer and enable the plugin in the Plugins tab.
+3. The plugin is written to `x64\Release\Plugins\FarmCounter\FarmCounter.dll` (Release builds carry no debug information, see `Directory.Build.targets`).
+4. Copy `FarmCounter.dll` into `Plugins\FarmCounter\` next to the POE2Fixer executable.

@@ -194,7 +194,7 @@ void DrawSeparateIncursionBar(const ResourceReaders::ItState& it) {
             float w = rmax.x - rmin.x;
             for (int i = 1; i < it.max; ++i) {
                 float x = rmin.x + w * ((float)i / (float)it.max);
-                dl->AddLine(ImVec2(x, rmin.y), ImVec2(x, rmax.y), IM_COL32(0, 0, 0, 100), 1.f);
+                dl->AddLineV(x, rmin.y, rmax.y, IM_COL32(0, 0, 0, 100), 1.f);
             }
         }
         ImGui::PopStyleColor();
@@ -326,7 +326,7 @@ void RenderOverlay(const OverlayDeps& d) {
             ImVec4(FcTheme::kAccent.x, FcTheme::kAccent.y, FcTheme::kAccent.z, 0.18f));
         float winRounding = ImGui::GetStyle().WindowRounding + 3.f;
         dl->AddRectFilled(p0, ImVec2(p0.x + winW, p0.y + rectH), fill, winRounding,
-                          ImDrawFlags_RoundCornersTop);
+                          ImDrawFlags_RoundTop);
 
         ImGui::SetCursorScreenPos(ImVec2(p0.x + padX, p0.y + padY));
         ImGui::TextColored(FcTheme::kAccent, "%s", FcGlyph::Map);
@@ -472,7 +472,7 @@ void RenderOverlay(const OverlayDeps& d) {
                     float bw = rmax.x - rmin.x;
                     for (int i = 1; i < it.max; ++i) {
                         float x = rmin.x + bw * ((float)i / (float)it.max);
-                        dl->AddLine(ImVec2(x, rmin.y), ImVec2(x, rmax.y), IM_COL32(0, 0, 0, 100), 1.f);
+                        dl->AddLineV(x, rmin.y, rmax.y, IM_COL32(0, 0, 0, 100), 1.f);
                     }
                 }
                 ImGui::PopStyleColor();
@@ -504,7 +504,7 @@ void RenderOverlay(const OverlayDeps& d) {
                 float bw = rmax.x - rmin.x;
                 for (int i = 1; i < 10; ++i) {
                     float x = rmin.x + bw * (i / 10.f);
-                    dl->AddLine(ImVec2(x, rmin.y), ImVec2(x, rmax.y), IM_COL32(0, 0, 0, 100), 1.f);
+                    dl->AddLineV(x, rmin.y, rmax.y, IM_COL32(0, 0, 0, 100), 1.f);
                 }
                 ImGui::PopStyleColor();
             }

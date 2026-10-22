@@ -7,6 +7,20 @@
 //        extern "C" PLUGIN_API PluginSDK::Plugin* CreatePlugin()            { return new MyPlugin(); }
 //        extern "C" PLUGIN_API void               DestroyPlugin(Plugin* p)  { delete p; }
 //      (PluginSDK_AttachHost is emitted for you when PLUGIN_EXPORTS is defined.)
+//   2b. Describe the plugin ONCE, in one .cpp, after including imgui.h and this
+//      header, at global scope, string literals only, one argument per line
+//      (the publish tool reads it):
+//        POEFIXER_PLUGIN_INFO(
+//            "MyPlugin",                        // id = folder name = DLL name, [A-Za-z0-9_]
+//            "My Plugin",                       // display name (UTF-8)
+//            "1.0.0",                           // X.Y.Z: X 1-3 digits, Y and Z one digit
+//            "Your Name",                       // author (UTF-8)
+//            "One short sentence: what a player gets from it.")   // <= 200 bytes
+//      It emits the PluginSDK_GetInfo export the host checks BEFORE CreatePlugin
+//      (and fills ImGui's word-wrap tables in the plugin's own ImGui copy at load);
+//      a DLL without it is refused as built for an older POE2Fixer. The plugin
+//      itself may call PluginSDK_GetInfo() (e.g. to show its own version).
+//      For a consistent settings look, see PluginUi.h (cards, label columns, tips).
 //   3. Build as an x64 DLL with PLUGIN_EXPORTS defined; drop it in Plugins/<Name>/.
 //
 // Inside the plugin, reach the host through ctx(): ctx()->Game.GetSnapshot(),
@@ -33,6 +47,100 @@
 #else
     #define PLUGIN_API __declspec(dllimport)
 #endif
+
+// ---------------------------------------------------------------------------
+// Plugin info (POEFIXER_PLUGIN_INFO) — see PluginInfoAbi in PluginAbi.h.
+// ---------------------------------------------------------------------------
+namespace PluginSDK::detail {
+
+constexpr bool IsAsciiDigit(char c) { return c >= '0' && c <= '9'; }
+
+// "X.Y.Z": X is 1-3 digits without a leading zero (0 itself is fine), Y and Z
+// exactly one digit each; nothing before, after or between (no spaces, no
+// suffix). The host's PluginVersion::Parse applies the same rule
+// (tools/plugin_version_test checks both against one table).
+constexpr bool IsValidPluginVersion(const char* s) {
+    if (!s) return false;
+    int i = 0;
+    int majorDigits = 0;
+    while (IsAsciiDigit(s[i])) { ++i; ++majorDigits; }
+    if (majorDigits < 1 || majorDigits > 3) return false;
+    if (majorDigits > 1 && s[0] == '0') return false;
+    if (s[i] != '.' || !IsAsciiDigit(s[i + 1]) || s[i + 2] != '.') return false;
+    if (!IsAsciiDigit(s[i + 3]) || s[i + 4] != '\0') return false;
+    return true;
+}
+
+// id = folder name = DLL base name: 1-64 characters of [A-Za-z0-9_].
+constexpr bool IsValidPluginId(const char* s) {
+    if (!s || !s[0]) return false;
+    int n = 0;
+    for (; s[n]; ++n) {
+        const char c = s[n];
+        const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || IsAsciiDigit(c) || c == '_';
+        if (!ok || n >= 64) return false;
+    }
+    return true;
+}
+
+constexpr unsigned StringBytes(const char* s) {
+    unsigned n = 0;
+    while (s && s[n]) ++n;
+    return n;
+}
+
+// Resolves IMGUI_VERSION_NUM inside POEFIXER_PLUGIN_INFO when imgui.h was NOT
+// included before the macro, so the macro fails with a readable static_assert
+// instead of an unknown identifier. Declared only while the ImGui macro is
+// still undefined (otherwise the line itself would be macro-expanded).
+namespace imgui_probe {
+#ifndef IMGUI_VERSION_NUM
+inline constexpr int IMGUI_VERSION_NUM = 0;
+#endif
+}
+
+} // namespace PluginSDK::detail
+
+// The plugin's info block, emitted by POEFIXER_PLUGIN_INFO. Declared here so
+// plugin code can read its own info (PluginSDK_GetInfo()->version).
+extern "C" PLUGIN_API const PluginInfoAbi* PluginSDK_GetInfo();
+
+// Use exactly once per plugin, at global scope in one .cpp, after including
+// imgui.h and PluginSDK.h. String literals only, one argument per line.
+#define POEFIXER_PLUGIN_INFO(PLUGIN_ID, PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR, PLUGIN_DESCRIPTION)    \
+    static_assert(::PluginSDK::detail::IsValidPluginId("" PLUGIN_ID),                                     \
+        "POEFIXER_PLUGIN_INFO: the id must be 1-64 characters of A-Z, a-z, 0-9 and _ "                   \
+        "(it equals the plugin folder and DLL name)");                                                    \
+    static_assert(::PluginSDK::detail::StringBytes("" PLUGIN_NAME) > 0,                                   \
+        "POEFIXER_PLUGIN_INFO: the display name must not be empty");                                      \
+    static_assert(::PluginSDK::detail::IsValidPluginVersion("" PLUGIN_VERSION),                           \
+        "POEFIXER_PLUGIN_INFO: the version must be X.Y.Z (X 1-3 digits, Y and Z exactly one digit)");     \
+    static_assert(::PluginSDK::detail::StringBytes("" PLUGIN_DESCRIPTION) <= 200,                         \
+        "POEFIXER_PLUGIN_INFO: the description must be at most 200 bytes");                               \
+    extern "C" PLUGIN_API const PluginInfoAbi* PluginSDK_GetInfo() {                                      \
+        using namespace ::PluginSDK::detail::imgui_probe;                                                 \
+        static_assert(IMGUI_VERSION_NUM > 0,                                                              \
+            "POEFIXER_PLUGIN_INFO: include imgui.h before this macro (it records IMGUI_VERSION_NUM)");    \
+        static const PluginInfoAbi info = {                                                               \
+            static_cast<uint32_t>(sizeof(PluginInfoAbi)),                                                 \
+            static_cast<uint32_t>(PLUGIN_INFO_ABI_VERSION),                                               \
+            static_cast<int32_t>(PLUGIN_SDK_VERSION),                                                     \
+            static_cast<int32_t>(IMGUI_VERSION_NUM),                                                      \
+            "" PLUGIN_ID, "" PLUGIN_NAME, "" PLUGIN_VERSION, "" PLUGIN_AUTHOR, "" PLUGIN_DESCRIPTION };   \
+        return &info;                                                                                     \
+    }                                                                                                     \
+    /* ImGui 1.93 fills its word-wrap character tables only when a font atlas is */                       \
+    /* built; the plugin's own ImGui copy draws with the host's atlas and never  */                       \
+    /* builds one, so every wrapped text would break mid-word. Fill them once at */                       \
+    /* DLL load (a pure static-table fill, no ImGui context needed). Same        */                       \
+    /* signature as imgui_internal.h, so a plugin need not include it.           */                       \
+    void ImTextInitClassifiers();                                                                         \
+    namespace {                                                                                           \
+    struct PoeFixerPluginTextClassifiers {                                                                \
+        PoeFixerPluginTextClassifiers() { ::ImTextInitClassifiers(); }                                    \
+    };                                                                                                    \
+    const PoeFixerPluginTextClassifiers g_poefixerPluginTextClassifiers;                                  \
+    }
 
 namespace PluginSDK {
 

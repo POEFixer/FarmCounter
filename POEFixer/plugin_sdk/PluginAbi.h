@@ -1407,6 +1407,43 @@ typedef struct HostAbi {
     void (*enumerate_area_mods_ex)(PsdkAreaModExVisitorFn cb, void* userdata);
 } HostAbi;
 
+/* ===========================================================================
+ * Plugin info export (required since 2026-10-22; not part of HostAbi)
+ * ===========================================================================
+ *
+ * Every plugin DLL exports
+ *
+ *     const PluginInfoAbi* PluginSDK_GetInfo(void);
+ *
+ * C++ plugins never write it by hand: POEFIXER_PLUGIN_INFO(...) in PluginSDK.h
+ * emits it. The host calls it BEFORE CreatePlugin and refuses to load a DLL
+ * that does not export it (a plugin built for an older POE2Fixer), whose block
+ * is malformed, whose sdk_version differs from PLUGIN_SDK_VERSION, whose
+ * imgui_version_num differs from the host's IMGUI_VERSION_NUM (plugins compile
+ * their own copy of ImGui and draw into the host's context: a different
+ * version corrupts it), or whose version / id string is invalid.
+ *
+ * The block and its strings are static data of the plugin and must stay valid
+ * while the DLL is loaded. Append-only: a later PLUGIN_INFO_ABI_VERSION adds
+ * fields at the END, and the host reads a field only when size_bytes covers it.
+ */
+#define PLUGIN_INFO_ABI_VERSION 1
+
+typedef struct PluginInfoAbi {
+    uint32_t    size_bytes;         /* sizeof(PluginInfoAbi) as the plugin was built */
+    uint32_t    info_version;       /* PLUGIN_INFO_ABI_VERSION */
+    int32_t     sdk_version;        /* PLUGIN_SDK_VERSION */
+    int32_t     imgui_version_num;  /* IMGUI_VERSION_NUM the plugin compiled against */
+    const char* id;                 /* = folder name = DLL base name, ASCII [A-Za-z0-9_] */
+    const char* name;               /* display name, UTF-8 ("Farm Counter") */
+    const char* version;            /* "X.Y.Z": X 1-3 digits, Y and Z exactly one digit 0-9 */
+    const char* author;             /* UTF-8 */
+    const char* description;        /* one short sentence, UTF-8, <= 200 bytes */
+} PluginInfoAbi;
+
+/* Export name: PluginSDK_GetInfo */
+typedef const PluginInfoAbi* (*PluginGetInfoFunc)(void);
+
 #ifdef __cplusplus
 }
 #endif

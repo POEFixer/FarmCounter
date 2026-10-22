@@ -113,7 +113,6 @@
   <ItemGroup>
     <ClInclude Include="..\..\POEFixer\plugin_sdk\PluginAbi.h" />
     <ClInclude Include="..\..\POEFixer\plugin_sdk\PluginSDK.h" />
-    <ClInclude Include="version.h" />
     <ClInclude Include="lib\sqlite3.h" />
     <ClInclude Include="lib\nlohmann\json.hpp" />
     <ClInclude Include="src\FarmDb.h" />

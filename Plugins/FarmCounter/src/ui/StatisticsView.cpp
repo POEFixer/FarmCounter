@@ -143,8 +143,7 @@ void Card(const char* label, const std::string& value, const std::string& footer
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
     if (ImGui::BeginChild("##card", ImVec2(width, height), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar)) {
         const auto position = ImGui::GetWindowPos();
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(position.x + 9, position.y + 1),
-            ImVec2(position.x + width - 9, position.y + 1), ImGui::ColorConvertFloat4ToU32(accent), 2.f);
+        ImGui::GetWindowDrawList()->AddLineH(position.x + 9, position.x + width - 9, position.y + 1, ImGui::ColorConvertFloat4ToU32(accent), 2.f);
         ImGui::TextDisabled("%s", label); ImGui::SameLine(0, 6);
         ImGui::TextColored(accent, "%s", value.c_str()); ImGui::SameLine(0, 6);
         ImGui::TextDisabled("%s", footer.c_str());
@@ -491,7 +490,7 @@ struct StatisticsView::State {
         const auto y = [&](double v) { return end.y - 3 - static_cast<float>((v - low) / range) * (end.y - origin.y - 6); };
         const float barWidth = (end.x - origin.x) / static_cast<float>(recent.size());
         auto* draw = ImGui::GetWindowDrawList();
-        draw->AddLine(ImVec2(origin.x, y(0)), ImVec2(end.x, y(0)), ImGui::GetColorU32(ImGuiCol_Border));
+        draw->AddLineH(origin.x, end.x, y(0), ImGui::GetColorU32(ImGuiCol_Border));
         for (size_t i = 0; i < recent.size(); ++i) {
             const double v = Stats::RunValue(runs[recent[i]], currency); const float top = (std::min)(y(0), y(v));
             draw->AddRectFilled(ImVec2(origin.x + static_cast<float>(i) * barWidth + 1, top),
