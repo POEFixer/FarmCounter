@@ -21,14 +21,18 @@ struct OverlaySettings {
     bool  goldShow          = true;  // gold total + map gain row in the overlay
     int   overlayCurrency   = 0;
     float windowAlpha       = 0.9f;
+    bool  showWindow        = true;  // the counter window (its gear menu's Close turns it off)
+    // Window positions from before POEFixer 366. Only read now: they seed the host's
+    // window store once (InfoWindowOptions::legacyPos) and place the windows on an
+    // older host. Still loaded and saved unchanged.
     float windowPosX        = -1.0f;
     float windowPosY        = -1.0f;
     bool  itShow            = true;
     bool  itSound           = true;
     float itVolume          = 0.5f;
     bool  itInMain          = false; // legacy key (round-tripped; no live logic)
-    bool  itSeparate        = false;
-    float itOverlayX        = -1.0f;
+    bool  itSeparate        = false; // beacons in their own window (its Close turns this off)
+    float itOverlayX        = -1.0f; // only read now (see windowPosX)
     float itOverlayY        = -1.0f;
     bool  hbInMain          = false; // legacy key (round-tripped; no live logic)
     bool  hbShow            = true;  // "Show Hiveblood in overlay"

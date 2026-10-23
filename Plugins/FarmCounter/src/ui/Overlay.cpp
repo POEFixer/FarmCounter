@@ -5,13 +5,17 @@
 //   accent header bar  -> compact stat strip -> inline resource bars -> loot list
 //
 // Preserved verbatim from the old overlay:
-//   - hover-through rect (window vanishes while hovered unless settings open)
+//   - hover-through rect (window vanishes while hovered unless settings open; in game only)
 //   - SetNextWindowBgAlpha / size constraints / NoTitleBar|NoScrollbar|AlwaysAutoResize
-//     (+ NoMove|NoMouseInputs unless settings open)
-//   - window-position write-back when settings open
+//     (+ NoMove|NoMouseInputs unless settings open; the host lifts both out of the game)
 //   - hideout-collapse path (stats + bars only, no header/loot)
 //   - separate-window Incursion overlay
 //   - the loot-row right-alignment math (old :1006-1019) and ChaosToDisplay (:1059-1063)
+//
+// Since POEFixer 366 both windows are the host's informational windows
+// (PluginInfoWindow.h): the host places them, remembers their places in and out of
+// the game and draws their gear menu (lock, Game overlay mode, reset, close). The old
+// windowPosX/Y and itOverlayX/Y fields only seed the host's store once.
 //
 // New in the hybrid layout: the gold accent header bar, the FcGlyph-iconed stat
 // strip, per-item icons in the loot list, and inline (label + bar) resource rows.
@@ -26,6 +30,7 @@
 #include "Formatting.h"
 #include "../LootRows.h"
 #include "../ZoneClassify.h"
+#include "../../../../POEFixer/plugin_sdk/PluginInfoWindow.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -206,36 +211,36 @@ void DrawSeparateIncursionBar(const ResourceReaders::ItState& it) {
 }
 
 // Separate floating Incursion overlay window (old DrawIncursionTokensOverlay, :1522-1546).
+// Its Close (gear menu) turns "Show as separate window" off: the beacons go back
+// into the counter window.
 void DrawSeparateIncursionOverlay(const OverlayDeps& d) {
     const OverlaySettings& s = *d.settings;
     if (!s.itShow || !s.itSeparate) return;
 
-    if (s.itOverlayX >= 0.f && s.itOverlayY >= 0.f)
-        ImGui::SetNextWindowPos(ImVec2(s.itOverlayX, s.itOverlayY), ImGuiCond_Once);
+    PluginSDK::InfoWindowOptions o;
+    o.id = "incursion";
+    o.title = nullptr;   // title-less: the gear sits in the top-right corner on hover
+    o.flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_AlwaysAutoResize |
+              ImGuiWindowFlags_NoBackground;
+    o.defaultPos = ImVec2(60.f, 20.f);   // just above the counter window's default place
+    o.legacyPos = ImVec2(s.itOverlayX, s.itOverlayY);   // -1 = never placed
+
     ImGui::SetNextWindowSize(ImVec2(230, 0), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-    ImGui::Begin("##IncTokensFC", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_AlwaysAutoResize |
-                 ImGuiWindowFlags_NoBackground);
-
-    DrawSeparateIncursionBar(d.resources->Incursion());
-
-    ImVec2 np = ImGui::GetWindowPos();
-    if (np.x != s.itOverlayX || np.y != s.itOverlayY) {
-        d.settings->itOverlayX = np.x;  // written back; shell persists to disk
-        d.settings->itOverlayY = np.y;
-    }
-    ImGui::End();
+    {
+        PluginSDK::InfoWindow window(*d.overlay, o, &d.settings->itSeparate);
+        if (window) DrawSeparateIncursionBar(d.resources->Incursion());
+    }   // the window ends here; its style is popped only after it
     ImGui::PopStyleVar(2);
 }
 
 } // namespace
 
 void RenderOverlay(const OverlayDeps& d) {
-    if (!d.tracker || !d.prices || !d.icons || !d.kills || !d.resources || !d.settings)
+    if (!d.tracker || !d.prices || !d.icons || !d.kills || !d.resources || !d.settings || !d.overlay)
         return;
 
     const OverlaySettings& s = *d.settings;
@@ -264,39 +269,47 @@ void RenderOverlay(const OverlayDeps& d) {
     // Separate Incursion overlay is drawn first (old order, :844).
     DrawSeparateIncursionOverlay(d);
 
+    // Settings -> "Show the counter window" (its gear menu's Close clears it).
+    if (!s.showWindow) return;
+
     // Hover-through: while the cursor is over last frame's window rect (and
     // settings are closed) skip the main window entirely so clicks pass to the
-    // game. Single overlay instance => a function-local static rect is fine.
+    // game. In game only: out of the game (gear -> Game overlay mode off) the
+    // window is on the desktop and the rect and the mouse are game pixels; this
+    // runs before the window, so it reads last frame's mode. Single overlay
+    // instance => function-local statics are fine.
     static ImVec4 s_overlayRect = ImVec4(0, 0, 0, 0);
+    static bool s_detached = false;
     ImVec2 mouse = ImGui::GetIO().MousePos;
     bool mouseOver = (s_overlayRect.z > s_overlayRect.x) &&
                      mouse.x >= s_overlayRect.x && mouse.x <= s_overlayRect.z &&
                      mouse.y >= s_overlayRect.y && mouse.y <= s_overlayRect.w;
-    if (mouseOver && !settingsOpen) return;
-
-    if (s.windowPosX >= 0.f)
-        ImGui::SetNextWindowPos(ImVec2(s.windowPosX, s.windowPosY), ImGuiCond_Once);
-    ImGui::SetNextWindowBgAlpha(s.windowAlpha);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(320, 40), ImVec2(600, 2000));
+    if (mouseOver && !settingsOpen && !s_detached) return;
 
     ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
                           ImGuiWindowFlags_AlwaysAutoResize;
     if (!settingsOpen) wf |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoMouseInputs;
 
-    if (!ImGui::Begin("##FarmCounterWnd", nullptr, wf)) { ImGui::End(); return; }
+    PluginSDK::InfoWindowOptions o;
+    o.id = "main";
+    o.title = nullptr;   // title-less: the gear sits in the top-right corner on hover
+    o.flags = wf;
+    o.defaultPos = ImVec2(60.f, 60.f);   // where ImGui placed it before it was ever moved
+    o.legacyPos = ImVec2(s.windowPosX, s.windowPosY);   // -1 = never placed
 
-    // Save window rect for next frame's hover test.
-    {
+    ImGui::SetNextWindowBgAlpha(s.windowAlpha);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(320, 40), ImVec2(600, 2000));
+    // The window ends when `window` goes out of scope (every return below).
+    PluginSDK::InfoWindow window(*d.overlay, o, &d.settings->showWindow);
+    if (window.Began()) s_detached = window.Detached();
+    if (!window) return;
+
+    // Save the in-game window rect for next frame's hover test.
+    if (!window.Detached()) {
         ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
         s_overlayRect = ImVec4(wp.x, wp.y, wp.x + ws.x, wp.y + ws.y);
-    }
-    // Window-pos write-back while settings are open (old :870-876).
-    if (settingsOpen) {
-        ImVec2 cp = ImGui::GetWindowPos();
-        if (cp.x != s.windowPosX || cp.y != s.windowPosY) {
-            d.settings->windowPosX = cp.x;
-            d.settings->windowPosY = cp.y;
-        }
+    } else {
+        s_overlayRect = ImVec4(0, 0, 0, 0);
     }
 
     const bool  inHideout = ClassifyZone(tr.CurrentZone()).isHideout;
@@ -512,7 +525,7 @@ void RenderOverlay(const OverlayDeps& d) {
     }
 
     // Hideout collapse: stats + bars only, no header/loot (old :918-923).
-    if (inHideout) { ImGui::End(); return; }
+    if (inHideout) return;
 
     // ── Loot list (only in map, baseline ready, items enabled; old :963-1041) ──
     if (inMap && baseReady && s.showItems) {
@@ -561,6 +574,4 @@ void RenderOverlay(const OverlayDeps& d) {
             if (visible.hidden > 0) ImGui::TextDisabled("+%zu more items", visible.hidden);
         }
     }
-
-    ImGui::End();
 }

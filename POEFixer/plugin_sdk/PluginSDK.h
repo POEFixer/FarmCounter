@@ -26,7 +26,9 @@
 // Inside the plugin, reach the host through ctx(): ctx()->Game.GetSnapshot(),
 // ctx()->Entities.Enumerate(...), etc. Returned values are per-call copies and
 // their std::string fields are already materialized (safe to keep). To draw,
-// set ImGui's context from ctx()->ImGuiContext each frame.
+// set ImGui's context from ctx()->ImGuiContext at every entry point that draws:
+// DrawUI and DrawSettings may run in two different contexts (see
+// PluginSDK_BindImGui below).
 #pragma once
 
 #include "PluginAbi.h"
@@ -128,6 +130,13 @@ extern "C" PLUGIN_API const PluginInfoAbi* PluginSDK_GetInfo();
             static_cast<int32_t>(IMGUI_VERSION_NUM),                                                      \
             "" PLUGIN_ID, "" PLUGIN_NAME, "" PLUGIN_VERSION, "" PLUGIN_AUTHOR, "" PLUGIN_DESCRIPTION };   \
         return &info;                                                                                     \
+    }                                                                                                     \
+    /* The host binds this plugin's ImGui before DrawUI / DrawSettings, which may run */                  \
+    /* in two contexts (Separate menu window): ctx()->ImGuiContext and this DLL's own */                  \
+    /* current context both follow (declaration and rules next to PluginSDK_AttachHost). */               \
+    extern "C" PLUGIN_API void PluginSDK_BindImGui(::PluginSDK::Plugin* plugin, void* imguiContext) {    \
+        ::PluginSDK_SetImGuiContextField(plugin, imguiContext);                                           \
+        if (imguiContext) ImGui::SetCurrentContext(static_cast<ImGuiContext*>(imguiContext));             \
     }                                                                                                     \
     /* ImGui 1.93 fills its word-wrap character tables only when a font atlas is */                       \
     /* built; the plugin's own ImGui copy draws with the host's atlas and never  */                       \
@@ -2996,6 +3005,130 @@ public:
     void SetEntityScanFlags(uint32_t flags) const {
         if (HasEntityScanFlags()) m_host->set_entity_scan_flags(m_plugin_token, flags);
     }
+
+    // Optional tail (desktop 366+): informational windows with the host's gear menu
+    // (HostAbi::info_window_begin). Use PluginSDK::InfoWindow (PluginInfoWindow.h),
+    // which falls back to a plain ImGui window on an older host.
+    bool HasInfoWindows() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, info_window_end) +
+                   sizeof(m_host->info_window_end) && m_host->info_window_begin && m_host->info_window_end;
+    }
+    int32_t BeginInfoWindow(const InfoWindowDescAbi& desc, uint8_t* ioOpen, InfoWindowFrameAbi* out) const {
+        return HasInfoWindows() ? m_host->info_window_begin(m_plugin_token, &desc, ioOpen, out) : 0;
+    }
+    void EndInfoWindow() const {
+        if (HasInfoWindows()) m_host->info_window_end(m_plugin_token);
+    }
+};
+
+// Controller buttons for GamepadService::Pulse (PSDK_GAMEPAD_*).
+enum class GamepadButton : int32_t {
+    A = PSDK_GAMEPAD_A, B = PSDK_GAMEPAD_B, X = PSDK_GAMEPAD_X, Y = PSDK_GAMEPAD_Y,
+    Start = PSDK_GAMEPAD_START, Back = PSDK_GAMEPAD_BACK,
+    DPadUp = PSDK_GAMEPAD_DPAD_UP, DPadDown = PSDK_GAMEPAD_DPAD_DOWN,
+    DPadLeft = PSDK_GAMEPAD_DPAD_LEFT, DPadRight = PSDK_GAMEPAD_DPAD_RIGHT,
+    LB = PSDK_GAMEPAD_LB, RB = PSDK_GAMEPAD_RB,
+    LS = PSDK_GAMEPAD_LS, RS = PSDK_GAMEPAD_RS,     // stick clicks
+    LT = PSDK_GAMEPAD_LT, RT = PSDK_GAMEPAD_RT,     // triggers, fully pressed
+};
+
+// What GamepadService::Pulse did (PSDK_GAMEPAD_PULSE_*, plus Unsupported).
+enum class GamepadPulseResult : int32_t {
+    Admitted       = PSDK_GAMEPAD_PULSE_ADMITTED,         // on its way to the game
+    Refused        = PSDK_GAMEPAD_PULSE_REFUSED,          // not now: nothing pressed, retry later
+    BadArgument    = PSDK_GAMEPAD_PULSE_BAD_ARGUMENT,
+    NotRequested   = PSDK_GAMEPAD_PULSE_NOT_REQUESTED,    // call RequestOutput(true) first
+    HostAutomation = PSDK_GAMEPAD_PULSE_HOST_AUTOMATION,  // host automation drives input: nothing stays pressed
+    NotEnabled     = PSDK_GAMEPAD_PULSE_NOT_ENABLED,      // the plugin is not enabled
+    Unsupported    = -100,                                // a host older than desktop 366
+};
+
+// The host's controller output (PSDK_GAMEPAD_STATUS_*, plus Unsupported).
+enum class GamepadOutputStatus : int32_t {
+    Unsupported           = -1,                                        // a host older than desktop 366
+    Idle                  = PSDK_GAMEPAD_STATUS_IDLE,                  // nobody asks for output
+    WaitingForGame        = PSDK_GAMEPAD_STATUS_WAITING_FOR_GAME,
+    NoController          = PSDK_GAMEPAD_STATUS_NO_CONTROLLER,
+    KeyboardMode          = PSDK_GAMEPAD_STATUS_KEYBOARD_MODE,          // the game is in mouse / keyboard mode
+    Ready                 = PSDK_GAMEPAD_STATUS_READY,                  // a press can reach the game now
+    NotInFront            = PSDK_GAMEPAD_STATUS_NOT_IN_FRONT,           // another window (POEFixer's menu too) is in front
+    UnsupportedBuild      = PSDK_GAMEPAD_STATUS_UNSUPPORTED_BUILD,
+    Busy                  = PSDK_GAMEPAD_STATUS_BUSY,
+    Error                 = PSDK_GAMEPAD_STATUS_ERROR,
+    UnsupportedController = PSDK_GAMEPAD_STATUS_UNSUPPORTED_CONTROLLER,
+    ForeignHook           = PSDK_GAMEPAD_STATUS_FOREIGN_HOOK,
+    IncompatibleBridge    = PSDK_GAMEPAD_STATUS_INCOMPATIBLE_BRIDGE,
+};
+
+struct GamepadState {
+    GamepadOutputStatus Status = GamepadOutputStatus::Unsupported;
+    int  Port = -1;            // XInput user index (0-3) the game reads while Ready / NotInFront, else -1
+    int  ControllerUi = -1;    // 1 the game shows its controller UI, 0 mouse / keyboard UI, -1 unknown
+    bool Requested = false;    // this plugin holds RequestOutput(true)
+    bool Ready() const { return Status == GamepadOutputStatus::Ready; }
+};
+
+// Press buttons on the controller the GAME has selected (desktop 366+), added to
+// what the player presses on it, as the host's AutoPot and Hotkeys do. Reached as
+// ctx()->Gamepad. A press reaches the game only while the game is in controller mode
+// and its own window is in front (GetState().Ready(); Game.IsForeground() also counts
+// POEFixer's windows, this does not), and never while host automation drives the
+// game's input. RequestOutput(true) while your feature is on, not around each press
+// (the host attaches to the game's controller only while someone asks; dropped on
+// disable / unload), then Pulse from a worker thread: Pulse and Cancel can block for
+// up to a few hundred milliseconds. A press releases itself; the same button can be
+// pressed again from hold + about 100 ms after it was admitted (a repeat cycle of at
+// least 200 ms). A held button hides other presses of the same button meanwhile.
+class GamepadService {
+    const HostAbi* m_host = nullptr;
+    void*          m_plugin_token = nullptr;
+public:
+    void Init(const HostAbi* host, void* token) {
+        m_host         = host;
+        m_plugin_token = token;
+    }
+
+    // The host has controller output for plugins (all four calls).
+    bool IsSupported() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, gamepad_get_status) +
+                   sizeof(m_host->gamepad_get_status) && m_host->gamepad_request_output &&
+               m_host->gamepad_pulse && m_host->gamepad_cancel && m_host->gamepad_get_status;
+    }
+
+    // Ask for (true) or withdraw (false, also releases what this plugin holds) controller
+    // output. The first request takes one of 16 output slots, kept until the plugin is
+    // disabled. False on an older host, when the plugin is not enabled, or when no slot
+    // is free (retry later).
+    bool RequestOutput(bool enable) const {
+        return IsSupported() && m_host->gamepad_request_output(m_plugin_token, enable ? 1 : 0) != 0;
+    }
+
+    // Press `button` for holdMs (100-9950 ms), with the left trigger held for the same
+    // time when holdLeftTrigger. Admitted = admitted, not proof the game read it.
+    GamepadPulseResult Pulse(GamepadButton button, int holdMs = 100, bool holdLeftTrigger = false) const {
+        if (!IsSupported()) return GamepadPulseResult::Unsupported;
+        return static_cast<GamepadPulseResult>(m_host->gamepad_pulse(m_plugin_token,
+            static_cast<int32_t>(button), holdMs, holdLeftTrigger ? PSDK_GAMEPAD_WITH_LT : 0u));
+    }
+
+    // Release every button this plugin's pulses still hold (never anyone else's).
+    void Cancel() const {
+        if (IsSupported()) m_host->gamepad_cancel(m_plugin_token);
+    }
+
+    // Status Unsupported on an older host.
+    GamepadState GetState() const {
+        GamepadState state;
+        if (!IsSupported()) return state;
+        GamepadStatusAbi abi{};
+        abi.size_bytes = sizeof(abi);
+        if (!m_host->gamepad_get_status(m_plugin_token, &abi)) return state;
+        state.Status       = static_cast<GamepadOutputStatus>(abi.status);
+        state.Port         = abi.port;
+        state.ControllerUi = abi.controller_ui;
+        state.Requested    = abi.requested != 0;
+        return state;
+    }
 };
 
 // The utility belt: life/mana flasks and charms in slot order (empty =>
@@ -3571,6 +3704,7 @@ struct Context {
     RuneshapeService  Runeshape;
     AtlasService      Atlas;
     SekhemaService    Sekhema;
+    GamepadService    Gamepad;      // desktop 366+: Gamepad.IsSupported()
     void* ImGuiContext = nullptr;
     void* D3DDevice    = nullptr;
 };
@@ -3582,6 +3716,16 @@ struct Context {
 // file) — you never call this yourself.
 extern "C" PLUGIN_API void PluginSDK_AttachHost(
     PluginSDK::Plugin* p, const HostAbi* abi, const char* directory);
+
+// The host binds your ImGui context before every DrawUI and DrawSettings call
+// (desktop 366+): with Settings -> "Separate menu window" the two run in DIFFERENT
+// ImGui contexts (DrawUI in the in-game overlay's, DrawSettings in the menu window's),
+// one frame each per loop iteration. Emitted by POEFIXER_PLUGIN_INFO (it needs imgui.h):
+// it sets ctx()->ImGuiContext and makes that context current in your own ImGui copy.
+// Never call it yourself; keep binding ctx()->ImGuiContext at your own entry points too.
+extern "C" PLUGIN_API void PluginSDK_BindImGui(PluginSDK::Plugin* p, void* imguiContext);
+// Writes ctx()->ImGuiContext for PluginSDK_BindImGui (the field is private to Plugin).
+inline void PluginSDK_SetImGuiContextField(PluginSDK::Plugin* p, void* imguiContext);
 
 namespace PluginSDK {
 
@@ -3645,6 +3789,7 @@ protected:
 
 private:
     friend void ::PluginSDK_AttachHost(Plugin*, const HostAbi*, const char*);
+    friend void ::PluginSDK_SetImGuiContextField(Plugin*, void*);
 
     Context     m_ctx{};
 
@@ -3682,6 +3827,11 @@ inline void PluginSDK_AttachHost(PluginSDK::Plugin* p,
     p->m_ctx.Runeshape .Init(&abi->runeshape,  abi);
     p->m_ctx.Atlas     .Init(&abi->atlas,      abi);
     p->m_ctx.Sekhema   .Init(&abi->sekhema,    abi);
+    p->m_ctx.Gamepad   .Init(abi, p);
     p->m_ctx.ImGuiContext = abi->imgui_context;
     p->m_ctx.D3DDevice    = abi->d3d_device;
+}
+
+inline void PluginSDK_SetImGuiContextField(PluginSDK::Plugin* p, void* imguiContext) {
+    if (p) p->m_ctx.ImGuiContext = imguiContext;
 }

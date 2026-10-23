@@ -1,8 +1,8 @@
 # FarmCounter
 
-Current version: 1.0.1
+Current version: 1.0.2
 
-Requires POE2Fixer 364 or newer.
+Requires POE2Fixer 366 or newer.
 
 FarmCounter records map runs, signed loot changes, prices, map time, kills,
 gold, Hiveblood and Atziri beacons. XP/hour and current-map XP are independent

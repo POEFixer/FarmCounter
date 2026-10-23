@@ -755,6 +755,54 @@ typedef int32_t (*PsdkAreaRoomVisitorFn)(const AreaRoomAbi* room, void* userdata
 #define PSDK_STASH_DOMAIN_OWN   0   // the player's own stash (Metadata/MiscellaneousObjects/Stash...)
 #define PSDK_STASH_DOMAIN_GUILD 1   // the guild stash (.../GuildStash...)
 
+// Controller buttons (HostAbi::gamepad_pulse): the host's own controller codes,
+// the same numbers AutoPot and Hotkeys store. The Guide button cannot be sent.
+#define PSDK_GAMEPAD_A          0x1000
+#define PSDK_GAMEPAD_B          0x1001
+#define PSDK_GAMEPAD_X          0x1002
+#define PSDK_GAMEPAD_Y          0x1003
+#define PSDK_GAMEPAD_START      0x1004
+#define PSDK_GAMEPAD_BACK       0x1005
+#define PSDK_GAMEPAD_DPAD_UP    0x1006
+#define PSDK_GAMEPAD_DPAD_DOWN  0x1007
+#define PSDK_GAMEPAD_DPAD_LEFT  0x1008
+#define PSDK_GAMEPAD_DPAD_RIGHT 0x1009
+#define PSDK_GAMEPAD_LB         0x100A
+#define PSDK_GAMEPAD_RB         0x100B
+#define PSDK_GAMEPAD_LS         0x100C   // left stick click
+#define PSDK_GAMEPAD_RS         0x100D   // right stick click
+#define PSDK_GAMEPAD_LT         0x100E   // left trigger, fully pressed
+#define PSDK_GAMEPAD_RT         0x100F   // right trigger, fully pressed
+
+// gamepad_pulse flags. Unknown bits refuse the pulse (BAD_ARGUMENT).
+#define PSDK_GAMEPAD_WITH_LT    0x1u     // hold the left trigger for the same time (LT + button)
+
+// gamepad_pulse results.
+#define PSDK_GAMEPAD_PULSE_ADMITTED         1   // the press is on its way to the game
+#define PSDK_GAMEPAD_PULSE_REFUSED          0   // not now: nothing pressed, retry later. With status
+                                                // READY: the button's repeat gap, or readiness is being
+                                                // refreshed; else the status says why
+#define PSDK_GAMEPAD_PULSE_BAD_ARGUMENT    -1   // unknown button (or Guide) or unknown flag bits
+#define PSDK_GAMEPAD_PULSE_NOT_REQUESTED   -2   // this plugin holds no gamepad_request_output
+#define PSDK_GAMEPAD_PULSE_HOST_AUTOMATION -3   // host automation drives the game's input
+                                                // (get_host_automation_active): nothing stays pressed
+#define PSDK_GAMEPAD_PULSE_NOT_ENABLED     -4   // the token is not an enabled plugin
+
+// Controller output status (GamepadStatusAbi::status).
+#define PSDK_GAMEPAD_STATUS_IDLE                   0   // no producer asks for controller output
+#define PSDK_GAMEPAD_STATUS_WAITING_FOR_GAME       1   // not attached, not in game, or no game data
+#define PSDK_GAMEPAD_STATUS_NO_CONTROLLER          2   // the game has no controller selected
+#define PSDK_GAMEPAD_STATUS_KEYBOARD_MODE          3   // the game is in mouse / keyboard mode
+#define PSDK_GAMEPAD_STATUS_READY                  4   // pulses reach the game's controller now
+#define PSDK_GAMEPAD_STATUS_UNSUPPORTED_BUILD      5   // this game build is not verified for it
+#define PSDK_GAMEPAD_STATUS_BUSY                   6   // another POEFixer owns the game's output
+#define PSDK_GAMEPAD_STATUS_ERROR                  7   // controller output failed (it recovers)
+#define PSDK_GAMEPAD_STATUS_UNSUPPORTED_CONTROLLER 8   // the selected controller is not XInput
+#define PSDK_GAMEPAD_STATUS_FOREIGN_HOOK           9   // another tool modifies controller input
+#define PSDK_GAMEPAD_STATUS_INCOMPATIBLE_BRIDGE   10   // an old controller bridge: restart the game
+#define PSDK_GAMEPAD_STATUS_NOT_IN_FRONT          11   // ready, but another window is in front (POEFixer's
+                                                       // own menu window too): presses are refused
+
 // One stash object of the current area (HostAbi::enumerate_stash_objects), from
 // the host's stash-object list: every entity whose path names a stash of either
 // domain, those the entity list drops (invalid flag) included. `path` is
@@ -1225,6 +1273,49 @@ typedef struct {
     int32_t (*get_ui_string_id)(uintptr_t ui_addr, char* out, int32_t out_size);
 } SekhemaServiceAbi;
 
+// An informational window drawn through the host (HostAbi::info_window_begin,
+// desktop 366+): a counter, a list, a timer. The host gives it a gear menu (Lock
+// window; Game overlay mode, off = the window leaves the game and can be placed
+// anywhere on the screens; Reset position; Close when io_open is given) and
+// remembers its place per mode in its own store, keyed by the plugin's info id and
+// window_id, so the plugin stores no position for it. Standalone struct: the host
+// reads only what size_bytes covers; fields are only ever appended.
+typedef struct InfoWindowDescAbi {
+    uint32_t    size_bytes;        // sizeof(InfoWindowDescAbi) as the plugin was built
+    const char* window_id;         // stable per plugin: 1-48 characters of [A-Za-z0-9_.-]
+    const char* title;             // UTF-8 title bar text; NULL or "" = none (flags decide
+                                   // whether there is a title bar: ImGuiWindowFlags_NoTitleBar)
+    int32_t     imgui_flags;       // ImGuiWindowFlags of the in-game window (click-through etc.)
+    float       default_x;         // in-game default position (overlay pixels)
+    float       default_y;
+    float       default_w;         // resizable windows: default size; 0 = ImGui's
+    float       default_h;
+    float       legacy_x;          // the plugin's own saved in-game position from before:
+    float       legacy_y;          //   seeds the host's store once; both exactly -1 = none
+    int32_t     legacy_collapsed;  // -1 none, 0 / 1
+} InfoWindowDescAbi;
+
+// What info_window_begin started (filled up to the plugin's size_bytes).
+typedef struct InfoWindowFrameAbi {
+    uint32_t size_bytes;           // sizeof(InfoWindowFrameAbi) as the plugin was built
+    int32_t  visible;              // 1: draw the contents (0 while collapsed)
+    int32_t  detached;             // 1: drawn outside the game (Game overlay mode off)
+    int32_t  interactive;          // 1: the window takes the mouse this frame
+} InfoWindowFrameAbi;
+
+// Controller output as one plugin sees it (HostAbi::gamepad_get_status, desktop
+// 366+). Standalone struct: the host fills only what size_bytes covers; fields are
+// only ever appended.
+typedef struct GamepadStatusAbi {
+    uint32_t size_bytes;           // sizeof(GamepadStatusAbi) as the plugin was built
+    int32_t  status;               // PSDK_GAMEPAD_STATUS_*: the host's controller output
+    int32_t  port;                 // XInput user index (0-3) the game reads while READY or
+                                   //   NOT_IN_FRONT, else -1
+    int32_t  controller_ui;        // 1: the game shows its controller UI, 0: its mouse /
+                                   //   keyboard UI, -1: unknown (not in game)
+    int32_t  requested;            // 1: this plugin holds a gamepad_request_output
+} GamepadStatusAbi;
+
 // The root table handed to every plugin. version must equal PLUGIN_SDK_VERSION;
 // trust a field only when size_bytes covers it. Everything below d3d_device is
 // an APPEND-ONLY tail — add new host functions here, never in the middle.
@@ -1526,6 +1617,59 @@ typedef struct HostAbi {
     // the lobby auto-login. A plugin that drives input should hold still while it is 1.
     // Optional append-only tail (after enumerate_stash_tabs): size-check before use.
     int32_t (*get_host_automation_active)(void);
+
+    // An informational window (InfoWindowDescAbi), from DrawUI only, render thread.
+    // Returns 1 when a window began: draw its contents when out->visible, then call
+    // info_window_end with the same token (also when not visible). Returns 0 when
+    // nothing began (*io_open == 0, an invalid desc, outside DrawUI, or the window is
+    // out of game and that layer is not up this frame): draw nothing, no end. While a
+    // window is begun the plugin is bound to the context it draws in (out of game:
+    // another ImGui context, through PluginSDK_BindImGui), so draw with plain ImGui
+    // calls and never keep that context; info_window_end binds the plugin back. Push
+    // window-level style before begin and pop it after end, never in between.
+    // io_open may be NULL (no Close item); the host writes 0 to it at end when the
+    // user closed the window. out may be NULL. Optional append-only tail (after
+    // get_host_automation_active): size-check before use.
+    int32_t (*info_window_begin)(void* plugin_token, const InfoWindowDescAbi* desc, uint8_t* io_open,
+                                 InfoWindowFrameAbi* out);
+    void (*info_window_end)(void* plugin_token);
+
+    // Controller output for THIS plugin (plugin_token as in OverlayServiceAbi),
+    // desktop 366+. The host presses buttons on the controller the GAME has selected
+    // (XInput), added to what the player presses on it, as AutoPot and Hotkeys do;
+    // no virtual controller is installed. A press reaches the game only while the
+    // game is in controller mode and its own window is in front, and never while host
+    // automation drives the game's input (a press held when it begins ends then). A
+    // held button merges with the same button pressed by the player, AutoPot, Hotkeys
+    // or another plugin: while it is held their presses of it make no new press.
+    // Any thread; pulse and cancel can block their caller for up to a few hundred
+    // milliseconds while the host hands the press to the game, so call them from a
+    // worker thread, not DrawUI.
+    //
+    // gamepad_request_output: enable != 0 asks the host to attach controller output
+    // (it attaches to the game only while some producer asks), 0 withdraws and releases
+    // the buttons this plugin still holds. Ask while the feature that presses is on, not
+    // around each press (the host attaches and detaches the game's controller each
+    // time); the request is dropped when the plugin is disabled or unloaded. The first
+    // request gives the plugin one of 16 output slots, its own until it is disabled or
+    // unloaded (a withdrawal keeps it). Returns 1 when stored, 0 when plugin_token is not
+    // an enabled plugin or no slot is free (retry later).
+    int32_t (*gamepad_request_output)(void* plugin_token, int32_t enable);
+    // gamepad_pulse: press `button` (PSDK_GAMEPAD_A .. PSDK_GAMEPAD_RT) for hold_ms,
+    // clamped to 100-9950 ms; flags PSDK_GAMEPAD_WITH_LT holds the left trigger with
+    // it. The press releases itself: nothing to undo. The same button can be pressed
+    // again from hold + about 100 ms after it was admitted (a repeat cycle of at least
+    // 200 ms); earlier the pulse answers REFUSED with status READY. These gaps are this
+    // plugin's own. Returns PSDK_GAMEPAD_PULSE_*. ADMITTED means admitted, not that the
+    // game has read it; REFUSED pressed nothing and is safe to retry.
+    int32_t (*gamepad_pulse)(void* plugin_token, int32_t button, int32_t hold_ms, uint32_t flags);
+    // gamepad_cancel: release every button this plugin's pulses still hold (never
+    // another plugin's or the host's presses).
+    void (*gamepad_cancel)(void* plugin_token);
+    // gamepad_get_status: fills out (GamepadStatusAbi, up to its size_bytes; set
+    // out->size_bytes first). Returns 1, or 0 when out is NULL or too small.
+    // Optional append-only tail (after info_window_end): size-check before use.
+    int32_t (*gamepad_get_status)(void* plugin_token, GamepadStatusAbi* out);
 } HostAbi;
 
 /* ===========================================================================

@@ -143,6 +143,7 @@ void SaveSettings(const fs::path& dir, const OverlaySettings& s) {
     j["goldShow"]          = s.goldShow;
     j["overlayCurrency"]   = s.overlayCurrency;
     j["windowAlpha"]       = s.windowAlpha;
+    j["showWindow"]        = s.showWindow;
     j["windowPosX"]        = s.windowPosX;
     j["windowPosY"]        = s.windowPosY;
     j["itShow"]            = s.itShow;
@@ -187,6 +188,7 @@ void LoadSettings(const fs::path& dir, OverlaySettings& out) {
         out.goldShow          = GetB(j, "goldShow",          out.goldShow);
         out.overlayCurrency   = std::clamp(GetI(j, "overlayCurrency", out.overlayCurrency), 0, 2);
         out.windowAlpha       = std::clamp(GetF(j, "windowAlpha", out.windowAlpha), 0.1f, 1.f);
+        out.showWindow        = GetB(j, "showWindow",        out.showWindow);   // absent before 1.0.2: shown
         out.windowPosX        = GetF(j, "windowPosX",        out.windowPosX);
         out.windowPosY        = GetF(j, "windowPosY",        out.windowPosY);
         out.itShow            = GetB(j, "itShow",            out.itShow);

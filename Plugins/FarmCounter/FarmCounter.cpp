@@ -176,12 +176,21 @@ public:
         OverlayDeps od{
             &m_tracker, &m_prices, &m_icons, &m_kills, &m_resources, &m_zones,
             &m_settings, m_settingsOpen, &m_settingsOpen,
-            count != m_lifetimeCounts.end() ? count->second : 0, &m_countCategory
+            count != m_lifetimeCounts.end() ? count->second : 0, &m_countCategory,
+            &ctx()->Overlay
         };
+        const bool hadWindow = m_settings.showWindow;
+        const bool hadSeparate = m_settings.itSeparate;
         RenderOverlay(od);
+        // A window's gear menu (Close) turned its show setting off: save it as any setting.
+        if ((hadWindow && !m_settings.showWindow) || (hadSeparate && !m_settings.itSeparate))
+            ::SaveSettings(m_dir, m_settings);
     }
 
     void DrawSettings() override {
+        // A separate menu window draws the settings in its own ImGui context.
+        if (ctx()->ImGuiContext)
+            ImGui::SetCurrentContext(static_cast<ImGuiContext*>(ctx()->ImGuiContext));
         m_settingsOpen = true;                          // consumed + reset by RenderOverlay
         SettingsDeps sd{
             &m_tracker, &m_prices, &m_settings, &m_zones, &m_kills, &m_resources, &m_icons, m_dir,
@@ -222,6 +231,6 @@ extern "C" PLUGIN_API void DestroyPlugin(PluginSDK::Plugin* p) {
 POEFIXER_PLUGIN_INFO(
     "FarmCounter",
     "Farm Counter",
-    "1.0.1",
+    "1.0.2",
     "POEFixer",
     "Records your map runs: loot value, map time, kills, gold and XP per hour, with run history and statistics per map type.")

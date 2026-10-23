@@ -14,6 +14,7 @@
 #include "ZonesView.h"
 #include "Theme.h"
 #include "Formatting.h"
+#include "../../../../POEFixer/plugin_sdk/PluginUi.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -58,6 +59,12 @@ void DrawSettingsTab(const SettingsDeps& d) {
 
     ImGui::SeparatorText("Overlay");
     if (ImGui::Checkbox("Enable Overlay Mode", &s.wantsOverlay))      save();
+    if (PluginUi::Check("Show the counter window", "showWindow", &s.showWindow,
+                        "Shows the farming counter window.\n"
+                        "Hover it while this tab is open for its gear menu: lock it, take it out\n"
+                        "of the game onto any screen, reset its position or close it.\n"
+                        "Close turns this off."))
+        save();
     if (ImGui::Checkbox("Show Item List",      &s.showItems))         save();
     ImGui::SetNextItemWidth(160.f);
     if (ImGui::SliderInt("Visible item rows", &s.visibleItemRows, 1, 50, "%d", ImGuiSliderFlags_AlwaysClamp)) {
