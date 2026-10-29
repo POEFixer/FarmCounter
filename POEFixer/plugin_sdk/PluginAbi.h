@@ -803,6 +803,10 @@ typedef int32_t (*PsdkAreaRoomVisitorFn)(const AreaRoomAbi* room, void* userdata
 #define PSDK_GAMEPAD_STATUS_NOT_IN_FRONT          11   // ready, but another window is in front (POEFixer's
                                                        // own menu window too): presses are refused
 
+// Installed game-data groups (HostAbi::get_game_data_revision, desktop 371).
+#define PSDK_GAMEDATA_GROUP_RADAR_ICONS 1   // the radar icon atlas (Resources/radar/icons.png)
+#define PSDK_GAMEDATA_GROUP_DAT_SCHEMA  2   // the .dat schema (Resources/dat-schema/schema.min.json)
+
 // One stash object of the current area (HostAbi::enumerate_stash_objects), from
 // the host's stash-object list: every entity whose path names a stash of either
 // domain, those the entity list drops (invalid flag) included. `path` is
@@ -1670,6 +1674,51 @@ typedef struct HostAbi {
     // out->size_bytes first). Returns 1, or 0 when out is NULL or too small.
     // Optional append-only tail (after info_window_end): size-check before use.
     int32_t (*gamepad_get_status)(void* plugin_token, GamepadStatusAbi* out);
+
+    // Optional append-only tail (after gamepad_get_status, desktop 371): size-check before use.
+    // Languages, the host's plugin-kit texts, game-data revisions, prices by item identity
+    // and game UI strings. Strings are UTF-8. Every out buffer that is not NULL and has room
+    // for one byte comes back NUL-terminated, and a text that does not fit is cut on a
+    // character boundary (never inside a UTF-8 character); where a call answers 0 for a
+    // buffer that is too small, never use what the buffer holds. Any thread.
+    //
+    // get_ui_language: the program's UI language, a program code ("en", "pt_BR", "ru", "th",
+    // "de", "fr", "es", "ja", "ko", "zh_TW"), into code, and into *revision (may be NULL) a
+    // number that moves every time the host loads a language: reload your texts when it
+    // moves. Returns the code's byte count, or 0 when code is NULL or too small (the
+    // revision is still written).
+    int32_t (*get_ui_language)(char* code, int32_t code_size, uint64_t* revision);
+    // get_game_language: the game client's language (Settings -> General "Game language",
+    // else detected from the game): its Languages.dat code ("en", "fr", "de", "pt-BR", "ru",
+    // "th", "zh-TW", "zh-CN", "es", "ko-KR", "ja-JP") into code, its .csd block name
+    // ("English", "Russian", "Simplified Chinese", ...; the language argument of
+    // format_stat_description_lang) into csd_name, and into *revision (may be NULL) a number
+    // that moves only when that language changes. Returns 1, or 0 when a buffer is NULL or
+    // too small (the revision is still written).
+    int32_t (*get_game_language)(char* code, int32_t code_size, char* csd_name, int32_t csd_size,
+                                 uint64_t* revision);
+    // get_host_text: the host's own text, in the UI language (English where that language has
+    // none), for a key that starts with "plugin_kit_" (the shared labels of PluginUi.h).
+    // Returns the byte count; 0 for any other key, an unknown key, or out NULL or too small.
+    int32_t (*get_host_text)(const char* key, char* out, int32_t out_size);
+    // get_game_data_revision: the generation of an installed game-data group
+    // (PSDK_GAMEDATA_GROUP_*). It moves whenever the host installs new content for the
+    // group: reload what you derived from it. 0 = no data this session, or an unknown group.
+    uint64_t (*get_game_data_revision)(int32_t group);
+    // lookup_price_by_item: the price of an item by its identity (rarity, unique name, base
+    // item path), not by the localized name the game shows. item_entity is an item entity
+    // address (an inventory item, or the entity of a WorldItem on the ground). Fills out
+    // (zeroed first; may be NULL) and the English name the price was looked up by into
+    // english_name. Returns 1 priced; 0 the item is known but has no price (english_name
+    // filled); -1 the item could not be read (english_name "").
+    int32_t (*lookup_price_by_item)(uintptr_t item_entity, PriceResultAbi* out, char* english_name,
+                                    int32_t english_size);
+    // get_game_string: the game's own UI text (ClientStrings) for client_string_id ("OK",
+    // "ItemPopupCorrupted", ...) in the language of game_code (a Languages.dat code or alt
+    // code; NULL or "" = the current game language), as the game shows it. Returns the byte
+    // count (a text cut to fit when out is small), 0 when the id or language is unknown.
+    int32_t (*get_game_string)(const char* client_string_id, const char* game_code, char* out,
+                               int32_t out_size);
 } HostAbi;
 
 /* ===========================================================================

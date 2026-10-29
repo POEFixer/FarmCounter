@@ -122,6 +122,7 @@
     <ClInclude Include="src\MapXpTracker.h" />
     <ClInclude Include="src\LootRows.h" />
     <ClInclude Include="src\IconTextures.h" />
+    <ClInclude Include="src\AtlasReload.h" />
     <ClInclude Include="src\KillCounter.h" />
     <ClInclude Include="src\LootDiff.h" />
     <ClInclude Include="src\LootScanner.h" />
@@ -139,6 +140,8 @@
     <ClInclude Include="src\ui\Formatting.h" />
     <ClInclude Include="src\ui\Settings.h" />
     <ClInclude Include="src\ui\Theme.h" />
+    <ClInclude Include="src\ui\Text.h" />
+    <ClInclude Include="src\lang_en.generated.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets"></ImportGroup>

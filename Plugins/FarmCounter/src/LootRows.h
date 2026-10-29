@@ -2,7 +2,20 @@
 #include "FarmTypes.h"
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <unordered_map>
 #include <vector>
+
+// The backpack items without a price as the last read priced them (by the item itself on POEFixer
+// 371+, custom prices included), sorted by name: the Settings tab's "Unpriced items in inventory".
+// Never asked again by the shown name: an item priced by what it is is not unpriced.
+inline std::vector<std::string> UnpricedNames(const std::unordered_map<std::string, InvSnapshot>& snap) {
+    std::vector<std::string> names;
+    for (const auto& [key, item] : snap)
+        if (!(std::isfinite(item.chaosEach) && item.chaosEach > 0.f)) names.push_back(item.name);
+    std::sort(names.begin(), names.end());
+    return names;
+}
 
 struct VisibleLootRows {
     std::vector<const LootEntry*> rows;

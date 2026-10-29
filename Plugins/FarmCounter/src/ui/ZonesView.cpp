@@ -1,5 +1,6 @@
 #include "ZonesView.h"
 #include "Settings.h"
+#include "Text.h"
 #include "../ZoneCatalog.h"
 #include "../ZoneClassify.h"
 #include <imgui.h>
@@ -8,6 +9,11 @@
 #include <unordered_set>
 
 namespace {
+using FcText::I18n::Key;
+using FcText::I18n::Tr;
+using FcText::I18n::TrF;
+using FcText::I18n::TrId;
+
 int ResizeString(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
         auto& value = *static_cast<std::string*>(data->UserData);
@@ -55,7 +61,8 @@ void ZonesView::Rebuild(const ZoneNames& names) {
         const bool registered = names.Map().contains(raw);
         if (entry && entry->isUnused && !m_includeUnused && !registered) return;
         if (!m_allAreas && !registered && !(entry && entry->isMapArea) && !ClassifyZone(raw).isMap) return;
-        Row row{raw, entry ? entry->name : "Unknown area", names.Override(raw), entry && entry->isUnused};
+        // An area the catalog does not know has no game name (drawn as "Unknown area").
+        Row row{raw, entry ? entry->name : "", names.Override(raw), entry && entry->isUnused};
         if (!search.empty() && FoldAscii(raw).find(search) == std::string::npos &&
             FoldAscii(row.official).find(search) == std::string::npos &&
             FoldAscii(row.custom).find(search) == std::string::npos) return;
@@ -67,6 +74,7 @@ void ZonesView::Rebuild(const ZoneNames& names) {
         add(raw, ZoneCatalog::Lookup(raw));
     }
     std::sort(m_rows.begin(), m_rows.end(), [](const Row& a, const Row& b) {
+        if (a.official.empty() != b.official.empty()) return !a.official.empty();   // unknown areas last
         if (a.official != b.official) return a.official < b.official;
         return a.id < b.id;
     });
@@ -85,52 +93,57 @@ void ZonesView::Draw(const SettingsDeps& deps) {
         m_status.clear();
         m_rebuild = true;
     }
-    ImGui::TextDisabled("Game names are built in. Custom display names change labels, keeping history together.");
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextDisabled("%s", Tr("zones_intro"));
+    ImGui::PopTextWrapPos();
     ImGui::SetNextItemWidth(-1.f);
-    if (TextInput("##ZoneSearch", "Search game name, area ID, or custom name", m_search)) m_rebuild = true;
-    if (ImGui::Checkbox("All areas##ZoneAllAreas", &m_allAreas)) m_rebuild = true;
+    if (TextInput("##ZoneSearch", Tr("zones_search_hint"), m_search)) m_rebuild = true;
+    if (ImGui::Checkbox(TrId("zones_all_areas"), &m_allAreas)) m_rebuild = true;
     ImGui::SameLine();
-    if (ImGui::Checkbox("Include unused##ZoneUnused", &m_includeUnused)) m_rebuild = true;
+    if (ImGui::Checkbox(TrId("zones_include_unused"), &m_includeUnused)) m_rebuild = true;
     ImGui::SameLine();
-    ImGui::TextDisabled("Default: maps and visited areas");
+    ImGui::TextDisabled("%s", Tr("zones_default_note"));
 
-    ImGui::SeparatorText("Add an area ID");
-    ImGui::SetNextItemWidth((std::max)(160.f, ImGui::GetContentRegionAvail().x - 115.f));
-    const bool addEntered = TextInput("##ZoneAddId", "Unknown or future area ID", m_addRaw,
+    ImGui::SeparatorText(Tr("zones_section_add"));
+    // The field leaves room for its button, whatever the button's translated text.
+    const float addButtonWidth = ImGui::CalcTextSize(Tr("zones_add")).x + 2 * ImGui::GetStyle().FramePadding.x +
+        ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextItemWidth((std::max)(ImGui::GetFontSize() * 12.f, ImGui::GetContentRegionAvail().x - addButtonWidth));
+    const bool addEntered = TextInput("##ZoneAddId", Tr("zones_add_hint"), m_addRaw,
                                       ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
-    const bool addClicked = ImGui::Button("Add / edit##ZoneAdd");
+    const bool addClicked = ImGui::Button(TrId("zones_add"));
     if (addEntered || addClicked) {
         const std::string raw = TrimId(m_addRaw);
         if (raw.empty()) {
-            m_status = "Enter an area ID.";
+            m_status = Key("zones_status_enter_id");
             m_error = true;
         } else if (names.Map().contains(raw) || names.SetOverride(deps.dir, raw, "")) {
             Select(raw, names);
             m_addRaw.clear();
         } else {
-            m_status = "Could not save this area. Check the plugin folder is writable.";
+            m_status = Key("zones_status_add_failed");
             m_error = true;
         }
     }
 
-    ImGui::SeparatorText("Display name");
+    ImGui::SeparatorText(Tr("zones_section_display"));
     if (m_selected.empty()) {
-        ImGui::TextDisabled("Choose Edit beside an area below.");
+        ImGui::TextDisabled("%s", Tr("zones_choose_edit"));
     } else {
         const auto* entry = ZoneCatalog::Lookup(m_selected);
-        ImGui::TextWrapped("%s", entry ? entry->name : "Unknown area");
+        ImGui::TextWrapped("%s", entry ? entry->name : Tr("zones_unknown_area"));
         ImGui::TextDisabled("%s", m_selected.c_str());
-        if (entry && entry->isUnused) ImGui::TextDisabled("Marked unused in the game data.");
+        if (entry && entry->isUnused) ImGui::TextDisabled("%s", Tr("zones_marked_unused"));
         if (m_focusEditor) { ImGui::SetKeyboardFocusHere(); m_focusEditor = false; }
         ImGui::SetNextItemWidth(-1.f);
         const bool entered = TextInput("##ZoneDisplayName", names.OfficialName(m_selected).c_str(),
             m_editText, ImGuiInputTextFlags_EnterReturnsTrue);
-        const bool saveClicked = ImGui::Button("Save##ZoneSave");
+        const bool saveClicked = ImGui::Button(TrId("zones_save"));
         ImGui::SameLine();
-        const bool resetClicked = ImGui::Button("Reset to game name##ZoneReset");
+        const bool resetClicked = ImGui::Button(TrId("zones_reset"));
         ImGui::SameLine();
-        if (ImGui::Button("Cancel##ZoneCancel")) {
+        if (ImGui::Button(TrId("zones_cancel"))) {
             m_selected.clear();
             m_editText.clear();
             m_status.clear();
@@ -138,26 +151,28 @@ void ZonesView::Draw(const SettingsDeps& deps) {
             const bool saved = resetClicked ? names.ResetOverride(deps.dir, m_selected)
                                            : names.SetOverride(deps.dir, m_selected, m_editText);
             m_error = !saved;
-            m_status = saved ? "Saved." : "Could not save the display name. Your previous name is unchanged.";
+            m_status = saved ? Key("zones_status_saved") : Key("zones_status_save_failed");
             if (saved && resetClicked) m_editText.clear();
         }
     }
     if (!m_status.empty()) {
-        if (m_error) ImGui::TextColored(ImVec4(1.f, .45f, .35f, 1.f), "%s", m_status.c_str());
-        else ImGui::TextDisabled("%s", m_status.c_str());
+        if (m_error) ImGui::TextColored(ImVec4(1.f, .45f, .35f, 1.f), "%s", Tr(m_status.c_str()));
+        else ImGui::TextDisabled("%s", Tr(m_status.c_str()));
     }
 
     if (m_rebuild || m_revision != names.Revision()) Rebuild(names);
-    ImGui::SeparatorText("Areas");
-    ImGui::TextDisabled("%zu areas", m_rows.size());
+    ImGui::SeparatorText(Tr("zones_section_areas"));
+    ImGui::TextDisabled("%s", TrF("zones_count", { { "count", std::to_string(m_rows.size()) } }).c_str());
     const float height = (std::max)(100.f, ImGui::GetContentRegionAvail().y);
     if (ImGui::BeginTable("##ZoneCatalogTable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter |
             ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp,
             ImVec2(0.f, height))) {
-        ImGui::TableSetupColumn("Game name", ImGuiTableColumnFlags_WidthStretch, 1.f);
-        ImGui::TableSetupColumn("Area ID", ImGuiTableColumnFlags_WidthStretch, 1.f);
-        ImGui::TableSetupColumn("Custom display name", ImGuiTableColumnFlags_WidthStretch, .85f);
-        ImGui::TableSetupColumn("##ZoneActions", ImGuiTableColumnFlags_WidthFixed, 44.f);
+        ImGui::TableSetupColumn(TrId("zones_col_game_name"), ImGuiTableColumnFlags_WidthStretch, 1.f);
+        ImGui::TableSetupColumn(TrId("zones_col_area_id"), ImGuiTableColumnFlags_WidthStretch, 1.f);
+        ImGui::TableSetupColumn(TrId("zones_col_custom"), ImGuiTableColumnFlags_WidthStretch, .85f);
+        // The table is resizable, so this measured width applies when it is first made.
+        ImGui::TableSetupColumn("##ZoneActions", ImGuiTableColumnFlags_WidthFixed,
+            ImGui::CalcTextSize(Tr("zones_edit")).x + 2 * ImGui::GetStyle().FramePadding.x);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
@@ -168,18 +183,20 @@ void ZonesView::Draw(const SettingsDeps& deps) {
                 ImGui::PushID(row.id.c_str());
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(row.official.c_str());
+                const char* official = row.official.empty() ? Tr("zones_unknown_area") : row.official.c_str();
+                ImGui::TextUnformatted(official);
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s%s", row.official.c_str(), row.unused ? "\nMarked unused in game data." : "");
+                    if (row.unused) ImGui::SetTooltip("%s\n%s", official, Tr("zones_row_unused"));
+                    else ImGui::SetTooltip("%s", official);
                 }
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(row.id.c_str());
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", row.id.c_str());
                 ImGui::TableNextColumn();
-                if (row.custom.empty()) ImGui::TextDisabled("Game default");
+                if (row.custom.empty()) ImGui::TextDisabled("%s", Tr("zones_game_default"));
                 else ImGui::TextUnformatted(row.custom.c_str());
                 ImGui::TableNextColumn();
-                if (ImGui::SmallButton("Edit")) Select(row.id, names);
+                if (ImGui::SmallButton(TrId("zones_edit"))) Select(row.id, names);
                 ImGui::PopID();
             }
         }

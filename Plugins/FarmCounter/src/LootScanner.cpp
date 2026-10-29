@@ -6,12 +6,15 @@ using Clock = std::chrono::steady_clock;
 
 // Build a name->InvSnapshot map from the player backpack. Ported from the old
 // monolith's BuildSnapshot (FarmCounter.cpp:1686-1717); the price block now goes
-// through PriceProvider::Lookup (core price service + local custom-price fallback)
-// instead of the deleted in-plugin price DB + custom map.
+// through PriceProvider::LookupItem (the core price service by item identity, by
+// name on an older host, + local custom prices) instead of the deleted in-plugin
+// price DB + custom map.
 std::unordered_map<std::string, InvSnapshot>
 LootScanner::BuildSnapshot(const PluginSDK::Inventory& inv) {
     std::unordered_map<std::string, InvSnapshot> snap;
     std::unordered_set<uintptr_t> seen;
+    // The host's by-item answers are kept for the area and the price revision (ItemQuoteCache).
+    if (m_ctx) m_quotes.Sync(m_expectedAreaCounter, m_ctx->Prices.GetRevision());
     for (const auto& item : inv.Items) {
         if (item.Address == 0) continue;
         if (!seen.insert(item.Address).second) continue;
@@ -28,7 +31,8 @@ LootScanner::BuildSnapshot(const PluginSDK::Inventory& inv) {
         s.stackCount  += stack;
         s.rarity       = rarity;
         if (s.chaosEach == 0.0f && m_prices) {
-            auto p = m_prices->Lookup(name);
+            // By the item's identity on a 371+ host (works in every game language), else by name.
+            auto p = m_prices->LookupItem(item.Address, name, &m_quotes);
             // The host price DB aliases each base type to the most expensive
             // unique on that base (e.g. "Utility Belt" -> Mageblood, "Sapphire"
             // -> Voices). Such a unique-category price is valid ONLY for an

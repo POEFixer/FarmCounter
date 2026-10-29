@@ -15,7 +15,7 @@ public:
 
 private:
     struct Row {
-        std::string id, official, custom;
+        std::string id, official, custom;   // official empty: an area the catalog does not know
         bool unused = false;
     };
     void Select(const std::string& raw, const ZoneNames& names);
@@ -29,6 +29,7 @@ private:
     bool m_includeUnused = false;
     bool m_focusEditor = false;
     bool m_error = false;
-    std::string m_search, m_addRaw, m_selected, m_editText, m_status;
+    std::string m_search, m_addRaw, m_selected, m_editText;
+    std::string m_status;   // a key (drawn through Tr)
     std::vector<Row> m_rows;
 };

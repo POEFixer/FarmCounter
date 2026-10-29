@@ -555,7 +555,8 @@ bool FarmTracker::NewSession() {
     // before the atomic archive; a failed preflight changes no session identity.
     if (!Save()) return false;
     if (m_CurrentSessionId == (std::numeric_limits<int>::max)()) {
-        m_LastPersistenceError = "Session identifier limit reached";
+        // Keys (StatisticsView draws the error through Tr); the database's own messages stay as they are.
+        m_LastPersistenceError = PluginSDK::I18n::Key("stats_error_session_limit");
         return false;
     }
     const bool restartMap = m_InMap && !m_MapZoneName.empty();
@@ -678,7 +679,7 @@ void FarmTracker::EraseRunAt(int idx) {
 bool FarmTracker::PersistenceResult(bool success) {
     if (!success) {
         m_LastPersistenceError = m_db.LastError();
-        if (m_LastPersistenceError.empty()) m_LastPersistenceError = "Statistics could not be saved";
+        if (m_LastPersistenceError.empty()) m_LastPersistenceError = PluginSDK::I18n::Key("stats_error_not_saved");
     } else if (!HasUnsavedChanges()) m_LastPersistenceError.clear();
     return success;
 }

@@ -21,6 +21,7 @@
 //      a DLL without it is refused as built for an older POE2Fixer. The plugin
 //      itself may call PluginSDK_GetInfo() (e.g. to show its own version).
 //      For a consistent settings look, see PluginUi.h (cards, label columns, tips).
+//      For your texts in the program's language, see PluginI18n.h (lang/<code>.json, I18n::Tr).
 //   3. Build as an x64 DLL with PLUGIN_EXPORTS defined; drop it in Plugins/<Name>/.
 //
 // Inside the plugin, reach the host through ctx(): ctx()->Game.GetSnapshot(),
@@ -32,6 +33,7 @@
 #pragma once
 
 #include "PluginAbi.h"
+#include "PluginI18n.h"   // I18n::Tr / TrF / TrId: the plugin's texts follow the program language
 
 #include <cstdint>
 #include <string>
@@ -135,6 +137,7 @@ extern "C" PLUGIN_API const PluginInfoAbi* PluginSDK_GetInfo();
     /* in two contexts (Separate menu window): ctx()->ImGuiContext and this DLL's own */                  \
     /* current context both follow (declaration and rules next to PluginSDK_AttachHost). */               \
     extern "C" PLUGIN_API void PluginSDK_BindImGui(::PluginSDK::Plugin* plugin, void* imguiContext) {    \
+        ::PluginSDK::I18n::Detail::OnBind();                                                              \
         ::PluginSDK_SetImGuiContextField(plugin, imguiContext);                                           \
         if (imguiContext) ImGui::SetCurrentContext(static_cast<ImGuiContext*>(imguiContext));             \
     }                                                                                                     \
@@ -3131,6 +3134,116 @@ public:
     }
 };
 
+// The game client's language as the host knows it (LanguageService::GameLanguage).
+struct GameLanguageInfo {
+    std::string gameCode = "en";       // Languages.dat code: "en", "fr", "de", "pt-BR", "ru", "th",
+                                       // "zh-TW", "zh-CN", "es", "ko-KR", "ja-JP"
+    std::string csdName  = "English";  // .csd block name: the language of FormatStatDescriptionLang
+    uint64_t    revision = 0;          // moves only when the game language changes
+    bool        known    = false;      // false on an older host (English assumed)
+};
+
+// Languages (desktop 371+), reached as ctx()->Lang: the program's UI language (your own
+// texts follow it), the game client's language (game text you match or show follows it), the
+// host's shared kit texts, revisions of the game data the host installs, and the game's own
+// UI strings. Every call works on an older host too: English, 0 or "".
+class LanguageService {
+    const HostAbi* m_host = nullptr;
+
+    bool HasUiLanguage() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, get_ui_language) + sizeof(m_host->get_ui_language) &&
+               m_host->get_ui_language;
+    }
+    bool HasGameLanguage() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, get_game_language) + sizeof(m_host->get_game_language) &&
+               m_host->get_game_language;
+    }
+    bool HasHostText() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, get_host_text) + sizeof(m_host->get_host_text) &&
+               m_host->get_host_text;
+    }
+    bool HasGameDataRevision() const {
+        return m_host &&
+               m_host->size_bytes >= offsetof(HostAbi, get_game_data_revision) + sizeof(m_host->get_game_data_revision) &&
+               m_host->get_game_data_revision;
+    }
+    bool HasGameString() const {
+        return m_host && m_host->size_bytes >= offsetof(HostAbi, get_game_string) + sizeof(m_host->get_game_string) &&
+               m_host->get_game_string;
+    }
+
+public:
+    void Init(const HostAbi* host) { m_host = host; }
+
+    // The host answers languages, kit texts and game-data revisions (desktop 371+).
+    bool IsSupported() const {
+        return HasUiLanguage() && HasGameLanguage() && HasHostText() && HasGameDataRevision();
+    }
+
+    // The program's UI language, a program code ("en", "pt_BR", "ru", "th", "de", "fr", "es",
+    // "ja", "ko", "zh_TW"); "en" on an older host. *revision (when given) moves every time the
+    // host loads a language: reload your texts when it moves. 0 on an older host.
+    std::string UiLanguage(uint64_t* revision = nullptr) const {
+        if (revision) *revision = 0;
+        if (!HasUiLanguage()) return "en";
+        char code[32] = {};
+        uint64_t rev = 0;
+        const int32_t n = m_host->get_ui_language(code, static_cast<int32_t>(sizeof(code)), &rev);
+        if (revision) *revision = rev;
+        return (n > 0 && n < static_cast<int32_t>(sizeof(code))) ? std::string(code, static_cast<size_t>(n))
+                                                                  : std::string("en");
+    }
+
+    // The game client's language (Settings -> General "Game language", else detected); English
+    // with known == false on an older host.
+    GameLanguageInfo GameLanguage() const {
+        GameLanguageInfo info;
+        if (!HasGameLanguage()) return info;
+        char code[32] = {};
+        char csd[64] = {};
+        uint64_t rev = 0;
+        if (m_host->get_game_language(code, static_cast<int32_t>(sizeof(code)), csd,
+                                      static_cast<int32_t>(sizeof(csd)), &rev) != 1)
+            return info;
+        code[sizeof(code) - 1] = '\0';
+        csd[sizeof(csd) - 1] = '\0';
+        if (!code[0] || !csd[0]) return info;
+        info.gameCode = code;
+        info.csdName  = csd;
+        info.revision = rev;
+        info.known    = true;
+        return info;
+    }
+
+    // The host's own text for a "plugin_kit_*" key in the UI language (PluginUi.h's shared
+    // labels); "" for any other key, an unknown key, or on an older host.
+    std::string HostText(const char* key) const {
+        if (!key || !HasHostText()) return {};
+        char buf[1024] = {};
+        const int32_t n = m_host->get_host_text(key, buf, static_cast<int32_t>(sizeof(buf)));
+        return (n > 0 && n < static_cast<int32_t>(sizeof(buf))) ? std::string(buf, static_cast<size_t>(n))
+                                                                 : std::string();
+    }
+
+    // The generation of a game-data group the host installs (PSDK_GAMEDATA_GROUP_*): reload what
+    // you derived from it when it moves. 0 = no data yet, an unknown group, or an older host.
+    uint64_t GameDataRevision(int32_t group) const {
+        return HasGameDataRevision() ? m_host->get_game_data_revision(group) : 0;
+    }
+
+    // The game's own UI text (ClientStrings) for `id` in the language of gameCode (a
+    // Languages.dat code or alt code; nullptr or "" = the current game language), as the game
+    // shows it; "" when unknown or on an older host.
+    std::string GameString(const char* id, const char* gameCode = nullptr) const {
+        if (!id || !HasGameString()) return {};
+        char buf[4096];
+        buf[0] = '\0';
+        const int32_t n = m_host->get_game_string(id, gameCode, buf, static_cast<int32_t>(sizeof(buf)));
+        return (n > 0 && n < static_cast<int32_t>(sizeof(buf))) ? std::string(buf, static_cast<size_t>(n))
+                                                                : std::string();
+    }
+};
+
 // The utility belt: life/mana flasks and charms in slot order (empty =>
 // Valid==false). Reached as ctx()->Flasks.
 class FlasksService {
@@ -3227,6 +3340,41 @@ public:
         if (m_abi && m_abi->get_rates) m_abi->get_rates(&r.divineInChaos, &r.exaltedInChaos);
         return r;
     }
+    // The host prices items by identity (desktop 371+).
+    bool CanLookupByItem() const {
+        return m_host &&
+               m_host->size_bytes >= offsetof(HostAbi, lookup_price_by_item) + sizeof(m_host->lookup_price_by_item) &&
+               m_host->lookup_price_by_item;
+    }
+
+    // The price of an item by its identity (rarity, unique name, base item path), never by the
+    // localized name the game shows: works in every game language. `item` is an item entity
+    // address (an inventory item, or the entity of a WorldItem on the ground). *englishName
+    // (when given) gets the English name the price was looked up by ("" when the item could not
+    // be read, or on an older host: use LookupPrice by name there).
+    PriceResult LookupPriceByItem(uintptr_t item, std::string* englishName = nullptr) const {
+        PriceResult r;
+        if (englishName) englishName->clear();
+        if (!CanLookupByItem()) return r;
+        PriceResultAbi a{};
+        char name[256] = {};
+        const int32_t rc = m_host->lookup_price_by_item(item, &a, name, static_cast<int32_t>(sizeof(name)));
+        if (rc < 0) return r;
+        name[sizeof(name) - 1] = '\0';
+        if (englishName) *englishName = name;
+        if (rc == 1 && a.found) {
+            a.category[sizeof(a.category) - 1] = '\0';
+            r.found = true; r.chaos = a.chaos; r.divine = a.divine; r.exalt = a.exalt;
+            r.category = a.category;
+            if (name[0] && m_host->lookup_price_icon) {
+                char ip[260] = {};
+                if (m_host->lookup_price_icon(name, ip, static_cast<int32_t>(sizeof(ip))))
+                    r.iconPath = ip;
+            }
+        }
+        return r;
+    }
+
     uint64_t GetRevision() const {
         // This optional callback extends the previously required host prefix.
         // Check the complete pointer's extent before accessing an older table.
@@ -3705,6 +3853,7 @@ struct Context {
     AtlasService      Atlas;
     SekhemaService    Sekhema;
     GamepadService    Gamepad;      // desktop 366+: Gamepad.IsSupported()
+    LanguageService   Lang;         // desktop 371+: Lang.IsSupported(); English on an older host
     void* ImGuiContext = nullptr;
     void* D3DDevice    = nullptr;
 };
@@ -3828,8 +3977,12 @@ inline void PluginSDK_AttachHost(PluginSDK::Plugin* p,
     p->m_ctx.Atlas     .Init(&abi->atlas,      abi);
     p->m_ctx.Sekhema   .Init(&abi->sekhema,    abi);
     p->m_ctx.Gamepad   .Init(abi, p);
+    p->m_ctx.Lang      .Init(abi);
     p->m_ctx.ImGuiContext = abi->imgui_context;
     p->m_ctx.D3DDevice    = abi->d3d_device;
+    // The plugin's lang/ folder and the host's UI language (PluginI18n.h): English until the
+    // host tells its language (the next bind or Tr call), and on an older host.
+    ::PluginSDK::I18n::Detail::Attach(abi, directory);
 }
 
 inline void PluginSDK_SetImGuiContextField(PluginSDK::Plugin* p, void* imguiContext) {

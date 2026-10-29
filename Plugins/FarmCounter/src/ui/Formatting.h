@@ -55,4 +55,13 @@ inline std::string Count(double value, bool showPlus = false) {
     else if (showPlus) result.insert(0, "+");
     return result;
 }
+
+// The day ("YYYY-MM-DD") of a run's date text ("YYYY-MM-DD HH:MM"). Any other text (a translated
+// "unknown date" fallback) is returned whole: a byte cut would split a Cyrillic or Thai character.
+inline std::string DayPart(const std::string& date) {
+    const auto digit = [&](size_t i) { return date[i] >= '0' && date[i] <= '9'; };
+    const bool isDate = date.size() >= 10 && digit(0) && digit(1) && digit(2) && digit(3) && date[4] == '-' &&
+                        digit(5) && digit(6) && date[7] == '-' && digit(8) && digit(9);
+    return isDate ? date.substr(0, 10) : date;
+}
 }

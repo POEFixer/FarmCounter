@@ -2,6 +2,7 @@
 #include "Settings.h"
 #include "Theme.h"
 #include "Formatting.h"
+#include "Text.h"
 #include "../StatisticsModel.h"
 #include <imgui.h>
 #include <algorithm>
@@ -19,14 +20,24 @@ namespace Stats = FarmStatistics;
 namespace {
 constexpr float kViewInset = 12.f;
 constexpr float kViewTopInset = 2.f;
-const char* Unit(int currency) { return currency == 1 ? "div" : currency == 2 ? "chaos" : "ex"; }
+using FcText::I18n::Key;
+using FcText::I18n::Tr;
+using FcText::I18n::TrF;
+using FcText::I18n::TrId;
+using FcText::Num;
+using FcText::Show;
+// "+12.50 chaos": the amount is formatted in code, the unit is the language's.
 std::string Money(double value, int currency) {
     if (!std::isfinite(value)) return "--";
-    if (std::fabs(value) >= 10000000.0) return FcFormat::Count(value, true) + " " + Unit(currency);
-    char text[96];
-    std::snprintf(text, sizeof(text), "%+.2f %s", value == 0 ? 0 : value, Unit(currency));
-    return text;
+    const std::string amount = std::fabs(value) >= 10000000.0 ? FcFormat::Count(value, true)
+                                                              : Num("%+.2f", value == 0 ? 0 : value);
+    if (currency == 1) return TrF("stats_money_div", { { "value", amount } });
+    if (currency == 2) return TrF("stats_money_chaos", { { "value", amount } });
+    return TrF("stats_money_ex", { { "value", amount } });
 }
+// The Period and map-type order combos (keys, looked up when drawn).
+constexpr const char* kPeriodKeys[] = {Key("stats_period_all"), Key("stats_period_7_days"), Key("stats_period_30_days")};
+constexpr const char* kOrderKeys[] = {Key("stats_order_name"), Key("stats_order_avg"), Key("stats_order_rate"), Key("stats_order_runs")};
 ImVec4 ValueColor(double value) { return value < 0 ? FcTheme::kLoss : FcTheme::kGain; }
 std::string Fold(std::string text) {
     for (auto& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -36,6 +47,12 @@ void Tip(const char* text) {
     if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) return;
     ImGui::BeginTooltip(); ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.f);
     ImGui::TextUnformatted(text); ImGui::PopTextWrapPos(); ImGui::EndTooltip();
+}
+// A map type's name: the zone's display name, or the language's "Unknown area" for the key
+// FarmStatistics gives a run without a map name (a key, never shown as it is).
+std::string CategoryText(const SettingsDeps& d, const std::string& key) {
+    if (key == "Unknown area") return Tr("zones_unknown_area");
+    return d.zones ? d.zones->CategoryDisplay(key) : key;
 }
 const std::string& MapName(const SettingsDeps& d, const MapRun& run) {
     return d.zones ? d.zones->Display(run.mapName) : run.mapName;
@@ -48,7 +65,7 @@ std::string Date(const MapRun& run) {
             char text[32]; std::strftime(text, sizeof(text), "%Y-%m-%d %H:%M", &local); return text;
         }
     }
-    return run.dbId > 0 ? "Unknown date" : "Not yet saved";
+    return run.dbId > 0 ? Tr("stats_unknown_date") : Tr("stats_not_saved_yet");
 }
 std::string EndDate(const MapRun& run) {
     if (run.startedAt > 0) {
@@ -61,10 +78,10 @@ std::string EndDate(const MapRun& run) {
     return Date(run);
 }
 std::string KillBreakdown(const std::array<int64_t, 4>& kills) {
-    return "Normal " + FcFormat::Count(static_cast<double>(kills[0])) +
-        " | Magic " + FcFormat::Count(static_cast<double>(kills[1])) +
-        " | Rare " + FcFormat::Count(static_cast<double>(kills[2])) +
-        " | Unique " + FcFormat::Count(static_cast<double>(kills[3]));
+    return TrF("stats_kills_normal", { { "count", FcFormat::Count(static_cast<double>(kills[0])) } }) + " | " +
+        TrF("stats_kills_magic", { { "count", FcFormat::Count(static_cast<double>(kills[1])) } }) + " | " +
+        TrF("stats_kills_rare", { { "count", FcFormat::Count(static_cast<double>(kills[2])) } }) + " | " +
+        TrF("stats_kills_unique", { { "count", FcFormat::Count(static_cast<double>(kills[3])) } });
 }
 std::string KillCell(const MapRun& run) {
     const auto kills = run.KillsByRarity();
@@ -75,8 +92,8 @@ std::string KillCell(const MapRun& run) {
 }
 void DrawKillIcons(const SettingsDeps& d, const std::array<int64_t, 5>& counts) {
     const float size = (std::max)(12.f, ImGui::GetTextLineHeight() * .9f);
-    const char* labels[] = {"Normal monsters", "Magic monsters", "Rare monsters",
-        "Unique monsters", "Rogue Exiles"};
+    static constexpr const char* labels[] = {Key("stats_monsters_normal"), Key("stats_monsters_magic"),
+        Key("stats_monsters_rare"), Key("stats_monsters_unique"), Key("kills_rogue")};
     const ImVec4 colors[] = {{1.f, 1.f, 1.f, 1.f}, {0.4f, 0.7f, 1.f, 1.f},
         {1.f, 1.f, 0.4f, 1.f}, {1.f, 0.5f, 0.f, 1.f}, {0.85f, 0.45f, 1.f, 1.f}};
     bool first = true;
@@ -90,7 +107,7 @@ void DrawKillIcons(const SettingsDeps& d, const std::array<int64_t, 5>& counts) 
         else ImGui::TextColored(colors[i], "%s", "●");
         ImGui::SameLine(0, 2);
         ImGui::TextUnformatted(FcFormat::Count(static_cast<double>(counts[i])).c_str());
-        Tip(labels[i]);
+        Tip(Tr(labels[i]));
         first = false;
     }
 }
@@ -98,14 +115,17 @@ void DrawKillIcons(const SettingsDeps& d, const MapRun& run) {
     DrawKillIcons(d, std::array<int64_t, 5>{run.killsNormal, run.killsMagic, run.killsRare,
         run.killsUnique, run.killsRogue});
 }
+// A run's status is a key (drawn through Tr): live, paused, archived or completed.
+constexpr const char* kStatusLive = Key("stats_status_live");
+constexpr const char* kStatusPaused = Key("stats_status_paused");
 const char* StatusGlyph(const char* status) {
-    if (std::strcmp(status, "Live") == 0) return FcGlyph::Live;
-    if (std::strcmp(status, "Paused") == 0) return FcGlyph::Paused;
+    if (std::strcmp(status, kStatusLive) == 0) return FcGlyph::Live;
+    if (std::strcmp(status, kStatusPaused) == 0) return FcGlyph::Paused;
     return FcGlyph::Completed;
 }
 ImVec4 StatusColor(const char* status) {
-    if (std::strcmp(status, "Live") == 0) return FcTheme::kXp;
-    if (std::strcmp(status, "Paused") == 0) return FcTheme::kAccent;
+    if (std::strcmp(status, kStatusLive) == 0) return FcTheme::kXp;
+    if (std::strcmp(status, kStatusPaused) == 0) return FcTheme::kAccent;
     return FcTheme::kGain;
 }
 bool ResizeDown(const char* id, float& height, float minimum) {
@@ -132,9 +152,10 @@ bool ResizeDown(const char* id, float& height, float minimum) {
 }
 const char* Status(const SettingsDeps& d, size_t index) {
     if (d.tracker->ActiveRunIndex() >= 0 && index == static_cast<size_t>(d.tracker->ActiveRunIndex()))
-        return d.tracker->IsPaused() || !d.tracker->InMap() ? "Paused" : "Live";
-    return d.tracker->Runs()[index].archived ? "Archived" : "Completed";
+        return d.tracker->IsPaused() || !d.tracker->InMap() ? kStatusPaused : kStatusLive;
+    return d.tracker->Runs()[index].archived ? Key("stats_status_archived") : Key("stats_status_completed");
 }
+// `label` is a key: its id is the key's in every language, its text the language's.
 void Card(const char* label, const std::string& value, const std::string& footer,
           const ImVec4& accent, float width, float height, const char* tooltip) {
     ImGui::PushID(label);
@@ -144,7 +165,7 @@ void Card(const char* label, const std::string& value, const std::string& footer
     if (ImGui::BeginChild("##card", ImVec2(width, height), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar)) {
         const auto position = ImGui::GetWindowPos();
         ImGui::GetWindowDrawList()->AddLineH(position.x + 9, position.x + width - 9, position.y + 1, ImGui::ColorConvertFloat4ToU32(accent), 2.f);
-        ImGui::TextDisabled("%s", label); ImGui::SameLine(0, 6);
+        ImGui::TextDisabled("%s", Tr(label)); ImGui::SameLine(0, 6);
         ImGui::TextColored(accent, "%s", value.c_str()); ImGui::SameLine(0, 6);
         ImGui::TextDisabled("%s", footer.c_str());
     }
@@ -152,9 +173,8 @@ void Card(const char* label, const std::string& value, const std::string& footer
     ImGui::PopStyleColor(); ImGui::PopStyleVar(2); ImGui::PopID();
 }
 void CurrencyTip(int kind) {
-    Tip(kind == 0 ? "Exalted values use each run's saved exchange rate. A missing saved rate uses the current rate."
-        : kind == 1 ? "Divine values use the current divine exchange rate. Recorded item prices are unchanged."
-                    : "Chaos values are the prices recorded with each run. Historical items are not repriced.");
+    Tip(Tr(kind == 0 ? Key("stats_currency_tip_exalted")
+         : kind == 1 ? Key("stats_currency_tip_divine") : Key("stats_currency_tip_chaos")));
 }
 float CategoryHeight() { return (std::max)(40.f, ImGui::GetTextLineHeight() * 1.85f + 6); }
 float ComboWidth(float minimum, std::initializer_list<const char*> labels) {
@@ -212,7 +232,8 @@ float TableInnerWidth(float minimum) {
 struct StatisticsView::State {
     enum class Action { None, NewSession, DeleteRun, DeleteSession, DeleteArchived };
     struct Selection { int64_t id = 0; size_t index = Stats::NoRun; uint64_t structure = 0; };
-    struct Request { Action action = Action::None; Selection run; int session = -1; std::string description; };
+    // `description` is the confirmation question's key (a session's carries its number in `session`).
+    struct Request { Action action = Action::None; Selection run; int session = -1; const char* description = nullptr; };
 
     uint64_t structure = (std::numeric_limits<uint64_t>::max)();
     uint64_t history = (std::numeric_limits<uint64_t>::max)();
@@ -227,7 +248,7 @@ struct StatisticsView::State {
     Stats::Currency currency;
     Stats::Sort sort = Stats::Sort::Date;
     bool ascending = false;
-    std::string category, error, lastSearch, widestSessionLabel;
+    std::string category, error, lastSearch;   // error: a key (drawn through Tr)
     std::array<char, 128> search{};
     Stats::Snapshot snapshot;
     std::vector<int> sessions;
@@ -249,7 +270,6 @@ struct StatisticsView::State {
             if (runs[i].archived) archived.insert(runs[i].sessionId);
         }
         sessions.assign(archived.begin(), archived.end()); hasArchived = !sessions.empty();
-        widestSessionLabel = sessions.empty() ? "" : "Archived #" + std::to_string(sessions.front());
     }
     void Select(size_t index, const SettingsDeps& d) {
         selected = {d.tracker->Runs()[index].dbId, index, structure}; detailGeneration = 0;
@@ -296,19 +316,22 @@ struct StatisticsView::State {
     }
     void Controls(const SettingsDeps& d, bool& saveCurrency) {
         currencyKind = std::clamp(d.settings ? d.settings->overlayCurrency : currencyKind, 0, 2);
-        const std::string preview = sessionMode == 0 ? "All sessions" : sessionMode == 1 ? "Current session" : "Archived #" + std::to_string(archivedSession);
-        const float sessionWidth = ComboWidth(155, {"All sessions", "Current session", preview.c_str(), widestSessionLabel.c_str()});
-        const float periodWidth = ComboWidth(108, {"All time", "Last 7 days", "Last 30 days"});
-        const float currencyWidth = ComboWidth(104, {"Exalted", "Divine", "Chaos"});
-        const float newWidth = (std::max)(120.f, std::ceil(ImGui::CalcTextSize("New session").x + 2 * ImGui::GetStyle().FramePadding.x) + 1);
+        const auto archivedLabel = [](int id) { return TrF("stats_session_archived", { { "id", std::to_string(id) } }); };
+        const std::string preview = sessionMode == 0 ? std::string(Tr("stats_session_all"))
+            : sessionMode == 1 ? std::string(Tr("stats_session_current")) : archivedLabel(archivedSession);
+        const std::string widestSession = sessions.empty() ? std::string() : archivedLabel(sessions.front());
+        const float sessionWidth = ComboWidth(155, {Tr("stats_session_all"), Tr("stats_session_current"), preview.c_str(), widestSession.c_str()});
+        const float periodWidth = ComboWidth(108, {Tr(kPeriodKeys[0]), Tr(kPeriodKeys[1]), Tr(kPeriodKeys[2])});
+        const float currencyWidth = ComboWidth(104, {Tr(FcText::kCurrencyKeys[0]), Tr(FcText::kCurrencyKeys[1]), Tr(FcText::kCurrencyKeys[2])});
+        const float newWidth = (std::max)(120.f, std::ceil(ImGui::CalcTextSize(Tr("stats_new_session")).x + 2 * ImGui::GetStyle().FramePadding.x) + 1);
         // EndGroup/SameLine carries the last framed widget's text baseline.
         // Give every label the same frame-height band, including the first one.
-        ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Session"); ImGui::SetNextItemWidth(sessionWidth);
+        ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("%s", Tr("stats_label_session")); ImGui::SetNextItemWidth(sessionWidth);
         if (ImGui::BeginCombo("##StatsSession", preview.c_str())) {
-            if (ImGui::Selectable("All sessions", sessionMode == 0)) { sessionMode = 0; dirty = true; }
-            if (ImGui::Selectable("Current session", sessionMode == 1)) { sessionMode = 1; dirty = true; }
+            if (ImGui::Selectable(TrId("stats_session_all"), sessionMode == 0)) { sessionMode = 0; dirty = true; }
+            if (ImGui::Selectable(TrId("stats_session_current"), sessionMode == 1)) { sessionMode = 1; dirty = true; }
             for (int id : sessions) {
-                const auto label = "Archived #" + std::to_string(id);
+                const auto label = archivedLabel(id) + "###StatsArchived:" + std::to_string(id);
                 if (ImGui::Selectable(label.c_str(), sessionMode == 2 && archivedSession == id)) {
                     sessionMode = 2; archivedSession = id; dirty = true;
                 }
@@ -316,30 +339,36 @@ struct StatisticsView::State {
             ImGui::EndCombo();
         }
         ImGui::EndGroup(); NextControl(periodWidth);
-        ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Period"); ImGui::SetNextItemWidth(periodWidth);
-        if (ImGui::Combo("##StatsPeriod", &period, "All time\0Last 7 days\0Last 30 days\0")) dirty = true;
+        ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("%s", Tr("stats_label_period")); ImGui::SetNextItemWidth(periodWidth);
+        if (FcText::KeyCombo("##StatsPeriod", period, kPeriodKeys, 3)) dirty = true;
         ImGui::EndGroup(); NextControl(currencyWidth);
-        ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Currency"); ImGui::SetNextItemWidth(currencyWidth);
-        if (ImGui::Combo("##StatsCurrency", &currencyKind, "Exalted\0Divine\0Chaos\0")) { dirty = true; saveCurrency = true; }
+        ImGui::BeginGroup(); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("%s", Tr("stats_label_currency")); ImGui::SetNextItemWidth(currencyWidth);
+        if (FcText::KeyCombo("##StatsCurrency", currencyKind, FcText::kCurrencyKeys, 3)) { dirty = true; saveCurrency = true; }
         CurrencyTip(currencyKind); ImGui::EndGroup(); const bool beside = NextControl(newWidth);
         ImGui::BeginGroup(); if (beside) ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
-        if (ImGui::Button("New session##StatsNewSession", ImVec2(newWidth, 0))) apply.action = Action::NewSession;
-        Tip("Archive the current session. If a map is open, a fresh run starts immediately in that map.");
+        if (ImGui::Button(TrId("stats_new_session"), ImVec2(newWidth, 0))) apply.action = Action::NewSession;
+        Tip(Tr("stats_new_session_tip"));
         ImGui::EndGroup();
         if (!d.tracker->LastPersistenceError().empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, FcTheme::kLoss);
-            ImGui::TextWrapped("Not saved: %s", d.tracker->LastPersistenceError().c_str()); ImGui::PopStyleColor();
-        } else if (!d.tracker->DbOpen()) ImGui::TextColored(FcTheme::kLoss, "History storage is unavailable.");
-        if (!error.empty()) { ImGui::TextWrapped("%s", error.c_str()); if (ImGui::SmallButton("Dismiss##StatsDismissError")) error.clear(); }
+            // The tracker's error is a key it set (I18n::Key) or the database's own message, which
+            // Tr hands back unchanged (a text that is no key is its own text).
+            ImGui::TextWrapped("%s", TrF("stats_not_saved", { { "error", Tr(d.tracker->LastPersistenceError().c_str()) } }).c_str());
+            ImGui::PopStyleColor();
+        } else if (!d.tracker->DbOpen()) ImGui::TextColored(FcTheme::kLoss, "%s", Tr("stats_storage_unavailable"));
+        if (!error.empty()) { ImGui::TextWrapped("%s", Tr(error.c_str())); if (ImGui::SmallButton(TrId("stats_dismiss"))) error.clear(); }
         if (pending.action != Action::None) {
-            ImGui::TextColored(FcTheme::kLoss, "%s", pending.description.c_str());
-            if (ImGui::Button("Confirm##StatsConfirm")) { apply = pending; pending = {}; }
-            ImGui::SameLine(); if (ImGui::Button("Cancel##StatsCancel")) pending = {};
+            const std::string question = pending.action == Action::DeleteSession
+                ? TrF("stats_confirm_delete_session", { { "id", std::to_string(pending.session) } })
+                : std::string(Tr(pending.description));
+            ImGui::TextColored(FcTheme::kLoss, "%s", question.c_str());
+            if (ImGui::Button(TrId("stats_confirm"))) { apply = pending; pending = {}; }
+            ImGui::SameLine(); if (ImGui::Button(TrId("stats_cancel"))) pending = {};
         }
         ImGui::Separator();
     }
     std::string CategoryName(const SettingsDeps& d, const Stats::Category& item) const {
-        return d.zones ? d.zones->CategoryDisplay(item.key) : item.key;
+        return CategoryText(d, item.key);
     }
     void CategoryRow(const std::string& label, const std::string& footer, bool isSelected) {
         ImGui::Selectable(label.c_str(), isSelected, ImGuiSelectableFlags_None, ImVec2(0, CategoryHeight()));
@@ -349,24 +378,25 @@ struct StatisticsView::State {
             ImGui::ColorConvertFloat4ToU32(FcTheme::kDim), footer.c_str());
     }
     void Sidebar(const SettingsDeps& d) {
-        ImGui::TextColored(FcTheme::kAccent, "MAP TYPES");
+        ImGui::TextColored(FcTheme::kAccent, "%s", Tr("stats_map_types_title"));
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputTextWithHint("##StatsSearch", "Search map types", search.data(), search.size())) categoryDirty = true;
+        if (ImGui::InputTextWithHint("##StatsSearch", Tr("stats_search_hint"), search.data(), search.size())) categoryDirty = true;
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::Combo("##StatsCategoryOrder", &categoryOrder, "Name\0Avg/run\0Profit/h\0Runs\0")) categoryDirty = true;
-        Tip("Sort map types by name, average profit per completed run, profit per hour, or run count.");
+        if (FcText::KeyCombo("##StatsCategoryOrder", categoryOrder, kOrderKeys, 4)) categoryDirty = true;
+        Tip(Tr("stats_order_tip"));
         const float actionWidth = ImGui::GetContentRegionAvail().x;
         const float textWidth = (std::max)(1.f, actionWidth - 2 * ImGui::GetStyle().FramePadding.x);
-        const std::string deleteAll = WrapControlText("Delete all archived", textWidth);
-        const std::string deleteSession = WrapControlText("Delete session", textWidth);
-        float footerHeight = ImGui::CalcTextSize("Manage history", nullptr, false, actionWidth).y +
+        const std::string deleteAll = WrapControlText(Tr("stats_delete_all_archived"), textWidth);
+        const std::string deleteSession = WrapControlText(Tr("stats_delete_session"), textWidth);
+        float footerHeight = ImGui::CalcTextSize(Tr("stats_manage_history"), nullptr, false, actionWidth).y +
             ImGui::CalcTextSize(deleteAll.c_str()).y + 2 * ImGui::GetStyle().FramePadding.y +
             5 * ImGui::GetStyle().ItemSpacing.y + 8;
         if (sessionMode == 2) footerHeight += ImGui::CalcTextSize(deleteSession.c_str()).y +
             2 * ImGui::GetStyle().FramePadding.y + ImGui::GetStyle().ItemSpacing.y;
         const float listHeight = (std::max)(80.f, ImGui::GetContentRegionAvail().y - footerHeight);
         if (ImGui::BeginChild("##StatsCategories", ImVec2(0, listHeight), ImGuiChildFlags_AlwaysUseWindowPadding)) {
-            CategoryRow("All map types##StatsCategory:all", std::to_string(allCount) + " recorded runs", category.empty());
+            CategoryRow(std::string(Tr("stats_all_map_types")) + "###StatsCategory:all",
+                TrF("stats_recorded_runs", { { "count", std::to_string(allCount) } }), category.empty());
             if (ImGui::IsItemClicked()) { category.clear(); dirty = true; Refresh(d); }
             if (categoryDirty || lastSearch != search.data()) {
                 categoryDirty = false; lastSearch = search.data(); categoryRows.clear(); const auto query = Fold(lastSearch);
@@ -389,46 +419,45 @@ struct StatisticsView::State {
             ImGuiListClipper clipper; clipper.Begin(static_cast<int>(categoryRows.size()), CategoryHeight() + ImGui::GetStyle().ItemSpacing.y);
             while (clipper.Step()) for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
                 const auto& item = snapshot.categories[categoryRows[static_cast<size_t>(row)]];
-                const std::string footer = std::to_string(item.summary.runs) + " runs  |  " + Money(item.summary.AverageValue(), currency.kind) + " / run";
-                CategoryRow(CategoryName(d, item) + "##StatsCategory:" + item.key, footer, category == item.key);
+                const std::string footer = TrF("stats_category_runs", { { "count", std::to_string(item.summary.runs) } }) + "  |  " +
+                    TrF("stats_category_per_run", { { "value", Money(item.summary.AverageValue(), currency.kind) } });
+                CategoryRow(CategoryName(d, item) + "###StatsCategory:" + item.key, footer, category == item.key);
                 if (ImGui::IsItemClicked()) clicked = item.key;
-                Tip("Compare average profit per completed run. Select a map type to inspect its full history.");
+                Tip(Tr("stats_category_tip"));
             }
-            if (categoryRows.empty()) ImGui::TextDisabled("No matching map types.");
+            if (categoryRows.empty()) ImGui::TextDisabled("%s", Tr("stats_no_matching_types"));
             if (!clicked.empty()) { category = std::move(clicked); dirty = true; Refresh(d); }
         }
         ImGui::EndChild();
         ImGui::Separator(); ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("Manage history"); ImGui::PopStyleColor();
+        ImGui::TextWrapped("%s", Tr("stats_manage_history")); ImGui::PopStyleColor();
         if (sessionMode == 2) {
             if (ImGui::Button((deleteSession + "###StatsDeleteSession").c_str(), ImVec2(actionWidth, 0)))
-                pending = {Action::DeleteSession, {}, archivedSession, "Delete archived session #" + std::to_string(archivedSession) + " and its runs?"};
-            Tip("Delete the selected archived session and its recorded runs.");
+                pending = {Action::DeleteSession, {}, archivedSession, nullptr};   // its question carries the number
+            Tip(Tr("stats_delete_session_tip"));
         }
         ImGui::BeginDisabled(!hasArchived);
         if (ImGui::Button((deleteAll + "###StatsDeleteArchived").c_str(), ImVec2(actionWidth, 0)))
-            pending = {Action::DeleteArchived, {}, -1, "Delete all archived runs and their loot?"};
+            pending = {Action::DeleteArchived, {}, -1, Key("stats_confirm_delete_archived")};
         ImGui::EndDisabled();
     }
     void Overview(const SettingsDeps& d) {
-        const auto title = category.empty() ? std::string("All map types") : d.zones ? d.zones->CategoryDisplay(category) : category;
+        const auto title = category.empty() ? std::string(Tr("stats_all_map_types")) : CategoryText(d, category);
         ImGui::TextWrapped("%s", title.c_str());
         const auto& sum = snapshot.summary;
-        const char* labels[] = {"Runs", "Profit", "Avg / run", "Profit / h"};
+        static constexpr const char* labels[] = {Key("stats_card_runs"), Key("stats_card_profit"), Key("stats_card_avg"), Key("stats_card_rate")};
         const std::array<std::string, 4> values = {std::to_string(sum.runs), Money(sum.value, currency.kind),
             sum.completedRuns ? Money(sum.AverageValue(), currency.kind) : "--", Money(sum.PerHour(), currency.kind)};
-        const std::array<std::string, 4> footers = {std::to_string(sum.completedRuns) + "/" +
-            std::to_string(sum.runs - sum.completedRuns) + " live", "selected", "done", "map"};
+        const std::array<std::string, 4> footers = {TrF("stats_card_runs_footer", { { "completed", std::to_string(sum.completedRuns) },
+            { "live", std::to_string(sum.runs - sum.completedRuns) } }), Tr("stats_card_profit_footer"),
+            Tr("stats_card_avg_footer"), Tr("stats_card_rate_footer")};
         const ImVec4 colors[] = {FcTheme::kAccent, ValueColor(sum.value), ValueColor(sum.AverageValue()), ValueColor(sum.PerHour())};
-        const char* tips[] = {
-            "Every recorded run in this selection, including the current unfinished run.",
-            "Total recorded profit in the selected sessions, period and map type.",
-            "Average over completed runs. The current unfinished run is excluded.",
-            "Total recorded value divided by total recorded map time, including the current run."};
+        static constexpr const char* tips[] = {Key("stats_card_runs_tip"), Key("stats_card_profit_tip"),
+            Key("stats_card_avg_tip"), Key("stats_card_rate_tip")};
         const float available = ImGui::GetContentRegionAvail().x, spacing = ImGui::GetStyle().ItemSpacing.x;
         float minimumWidth = 170;
         for (size_t i = 0; i < values.size(); ++i)
-            minimumWidth = (std::max)(minimumWidth, ImGui::CalcTextSize(labels[i]).x +
+            minimumWidth = (std::max)(minimumWidth, ImGui::CalcTextSize(Tr(labels[i])).x +
                 ImGui::CalcTextSize(values[i].c_str()).x + 36);
         int columns = available >= 700 ? 4 : 2;
         while (columns > 1 && (available - (columns - 1) * spacing) / columns < minimumWidth) columns /= 2;
@@ -436,37 +465,38 @@ struct StatisticsView::State {
         float height = (std::max)(34.f, ImGui::GetTextLineHeight() + 2 * ImGui::GetStyle().WindowPadding.y + 2);
         for (size_t i = 0; i < values.size(); ++i) {
             if (i % static_cast<size_t>(columns)) ImGui::SameLine();
-            Card(labels[i], values[i], footers[i], colors[i], width, height, tips[i]);
+            Card(labels[i], values[i], footers[i], colors[i], width, height, Tr(tips[i]));
         }
-        const std::string timeText = "Time " + FcFormat::Duration(static_cast<double>(sum.seconds));
-        const std::string goldText = "Gold " + FcFormat::Count(static_cast<double>(sum.gold));
-        const std::string hiveText = "Hiveblood " + FcFormat::Count(static_cast<double>(sum.hiveblood));
-        const std::string beaconText = "Beacons " + FcFormat::Count(static_cast<double>(sum.beacons));
-        const std::string bestText = "Best " + (sum.completedRuns ? Money(sum.bestValue, currency.kind) : "--");
-        const std::string worstText = "Worst " + (sum.completedRuns ? Money(sum.worstValue, currency.kind) : "--");
+        const std::string timeText = TrF("stats_metric_time", { { "time", FcFormat::Duration(static_cast<double>(sum.seconds)) } });
+        const std::string goldText = TrF("stats_metric_gold", { { "count", FcFormat::Count(static_cast<double>(sum.gold)) } });
+        const std::string hiveText = TrF("stats_metric_hiveblood", { { "count", FcFormat::Count(static_cast<double>(sum.hiveblood)) } });
+        const std::string beaconText = TrF("stats_metric_beacons", { { "count", FcFormat::Count(static_cast<double>(sum.beacons)) } });
+        const std::string bestText = TrF("stats_metric_best", { { "value", sum.completedRuns ? Money(sum.bestValue, currency.kind) : std::string("--") } });
+        const std::string worstText = TrF("stats_metric_worst", { { "value", sum.completedRuns ? Money(sum.worstValue, currency.kind) : std::string("--") } });
         const float iconSize = (std::max)(12.f, ImGui::GetTextLineHeight() * .9f);
         const float killWidth = 5.f * (iconSize + ImGui::CalcTextSize("999K").x + 8.f);
-        const float trendWidth = ImGui::GetFrameHeight() + ImGui::CalcTextSize("Recent runs").x + ImGui::GetStyle().ItemSpacing.x;
+        const float trendWidth = ImGui::GetFrameHeight() + ImGui::CalcTextSize(Tr("stats_recent_runs")).x + ImGui::GetStyle().ItemSpacing.x;
         const float metricsWidth = ImGui::CalcTextSize(timeText.c_str()).x + ImGui::CalcTextSize(goldText.c_str()).x +
             ImGui::CalcTextSize(hiveText.c_str()).x + ImGui::CalcTextSize(beaconText.c_str()).x +
             ImGui::CalcTextSize(bestText.c_str()).x + ImGui::CalcTextSize(worstText.c_str()).x + killWidth +
-            ImGui::GetStyle().ItemSpacing.x * 14 + ImGui::CalcTextSize("Kills").x + trendWidth;
+            ImGui::GetStyle().ItemSpacing.x * 14 + ImGui::CalcTextSize(Tr("stats_metric_kills")).x + trendWidth;
         const bool metricsVisible = BeginMetricLine("##StatsOverviewMetrics", metricsWidth, true);
         if (metricsVisible) {
             auto separator = [] {
                 ImGui::SameLine(0, 6); ImGui::TextDisabled("%s", "|"); ImGui::SameLine(0, 6);
             };
             ImGui::TextUnformatted(timeText.c_str()); separator();
-            ImGui::TextDisabled("Kills"); ImGui::SameLine(0, 4); DrawKillIcons(d, sum.kills); separator();
+            ImGui::TextDisabled("%s", Tr("stats_metric_kills")); ImGui::SameLine(0, 4); DrawKillIcons(d, sum.kills); separator();
             ImGui::TextUnformatted(goldText.c_str()); separator(); ImGui::TextUnformatted(hiveText.c_str()); separator();
             ImGui::TextUnformatted(beaconText.c_str()); separator(); ImGui::TextUnformatted(bestText.c_str());
             separator(); ImGui::TextUnformatted(worstText.c_str()); ImGui::SameLine(0, 12);
-            ImGui::Checkbox("Recent runs##StatsTrend", &showTrend);
+            ImGui::Checkbox(TrId("stats_recent_runs"), &showTrend);
         }
-        EndMetricLine(metricsVisible); Tip("Best and worst are completed runs only.");
+        EndMetricLine(metricsVisible); Tip(Tr("stats_best_worst_tip"));
         if (sum.invalidValues) {
             ImGui::PushStyleColor(ImGuiCol_Text, FcTheme::kLoss);
-            ImGui::TextWrapped("%zu invalid historical profit values were omitted.", sum.invalidValues); ImGui::PopStyleColor();
+            ImGui::TextWrapped("%s", TrF("stats_invalid_values", { { "count", std::to_string(sum.invalidValues) } }).c_str());
+            ImGui::PopStyleColor();
         }
     }
     void Trend(const SettingsDeps& d) {
@@ -479,9 +509,10 @@ struct StatisticsView::State {
             Stats::SortRows(recent, runs, currency, Stats::Sort::Date, true);
             if (recent.size() > 24) recent.erase(recent.begin(), recent.end() - 24);
         }
-        if (recent.empty()) { ImGui::TextDisabled("No completed runs to chart."); return; }
-        ImGui::TextDisabled("Latest %zu completed runs - oldest to newest", recent.size());
-        ImGui::TextDisabled("%s - %s", Date(runs[recent.front()]).substr(0, 10).c_str(), Date(runs[recent.back()]).substr(0, 10).c_str());
+        if (recent.empty()) { ImGui::TextDisabled("%s", Tr("stats_no_completed_chart")); return; }
+        ImGui::TextDisabled("%s", TrF("stats_latest_runs", { { "count", std::to_string(recent.size()) } }).c_str());
+        // The day of a real date; a translated "no date" text whole (never cut inside a character).
+        ImGui::TextDisabled("%s - %s", FcFormat::DayPart(Date(runs[recent.front()])).c_str(), FcFormat::DayPart(Date(runs[recent.back()])).c_str());
         ImGui::InvisibleButton("##StatsTrendBars", ImVec2(ImGui::GetContentRegionAvail().x, 48));
         const auto origin = ImGui::GetItemRectMin(), end = ImGui::GetItemRectMax();
         double low = 0, high = 0;
@@ -505,7 +536,7 @@ struct StatisticsView::State {
         }
     }
     void RunTable(const SettingsDeps& d) {
-        if (snapshot.rows.empty()) { ImGui::TextDisabled("No runs match these filters."); return; }
+        if (snapshot.rows.empty()) { ImGui::TextDisabled("%s", Tr("stats_no_runs_match")); return; }
         const auto& runs = d.tracker->Runs();
         const float scale = ImGui::GetFontSize() / 13.f;
         const float dateWidth = (std::max)(132.f * scale, ImGui::CalcTextSize("0000-00-00 00:00").x);
@@ -514,18 +545,25 @@ struct StatisticsView::State {
         const float killsWidth = (std::max)(72.f * scale,
             ImGui::CalcTextSize("999K/999K/999K/999K").x + 2 * ImGui::GetStyle().CellPadding.x);
         const float goldWidth = 62.f * scale;
-        const float innerWidth = TableInnerWidth(dateWidth + moneyWidth * 2 + timeWidth +
-            killsWidth + goldWidth + 90.f * scale + 14 * ImGui::GetStyle().CellPadding.x);
+        // A fixed column is at least as wide as its translated header (and its sort arrow).
+        const auto fit = [](const char* key, float width) {
+            return (std::max)(width, ImGui::CalcTextSize(Tr(key)).x + ImGui::GetFontSize() + 2 * ImGui::GetStyle().CellPadding.x);
+        };
+        const float dateColumn = fit("stats_col_started", dateWidth), profitColumn = fit("stats_col_profit", moneyWidth);
+        const float timeColumn = fit("stats_col_time", timeWidth), rateColumn = fit("stats_col_rate", moneyWidth);
+        const float killsColumn = fit("stats_col_kills", killsWidth), goldColumn = fit("stats_col_gold", goldWidth);
+        const float innerWidth = TableInnerWidth(dateColumn + profitColumn + rateColumn + timeColumn +
+            killsColumn + goldColumn + 90.f * scale + 14 * ImGui::GetStyle().CellPadding.x);
         const auto flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY |
             ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_Hideable | ImGuiTableFlags_PadOuterX;
         if (ImGui::BeginTable("##StatsRuns", 7, flags, ImVec2(0, runTableHeight), innerWidth)) {
-            ImGui::TableSetupColumn("Started", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending, dateWidth, static_cast<ImGuiID>(Stats::Sort::Date));
-            ImGui::TableSetupColumn("Map variant", ImGuiTableColumnFlags_WidthStretch, 1, static_cast<ImGuiID>(Stats::Sort::Map));
-            ImGui::TableSetupColumn("Profit", ImGuiTableColumnFlags_WidthFixed, moneyWidth, static_cast<ImGuiID>(Stats::Sort::Profit));
-            ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, timeWidth, static_cast<ImGuiID>(Stats::Sort::Duration));
-            ImGui::TableSetupColumn("Profit / h", ImGuiTableColumnFlags_WidthFixed, moneyWidth, static_cast<ImGuiID>(Stats::Sort::Rate));
-            ImGui::TableSetupColumn("Kills N/M/R/U", ImGuiTableColumnFlags_WidthFixed, killsWidth, static_cast<ImGuiID>(Stats::Sort::Kills));
-            ImGui::TableSetupColumn("Gold", ImGuiTableColumnFlags_WidthFixed, goldWidth, static_cast<ImGuiID>(Stats::Sort::Gold));
+            ImGui::TableSetupColumn(TrId("stats_col_started"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending, dateColumn, static_cast<ImGuiID>(Stats::Sort::Date));
+            ImGui::TableSetupColumn(TrId("stats_col_map"), ImGuiTableColumnFlags_WidthStretch, 1, static_cast<ImGuiID>(Stats::Sort::Map));
+            ImGui::TableSetupColumn(TrId("stats_col_profit"), ImGuiTableColumnFlags_WidthFixed, profitColumn, static_cast<ImGuiID>(Stats::Sort::Profit));
+            ImGui::TableSetupColumn(TrId("stats_col_time"), ImGuiTableColumnFlags_WidthFixed, timeColumn, static_cast<ImGuiID>(Stats::Sort::Duration));
+            ImGui::TableSetupColumn(TrId("stats_col_rate"), ImGuiTableColumnFlags_WidthFixed, rateColumn, static_cast<ImGuiID>(Stats::Sort::Rate));
+            ImGui::TableSetupColumn(TrId("stats_col_kills"), ImGuiTableColumnFlags_WidthFixed, killsColumn, static_cast<ImGuiID>(Stats::Sort::Kills));
+            ImGui::TableSetupColumn(TrId("stats_col_gold"), ImGuiTableColumnFlags_WidthFixed, goldColumn, static_cast<ImGuiID>(Stats::Sort::Gold));
             ImGui::TableSetupScrollFreeze(0, 1); ImGui::TableHeadersRow();
             if (auto* specs = ImGui::TableGetSortSpecs(); specs && specs->SpecsDirty && specs->SpecsCount) {
                 sort = static_cast<Stats::Sort>(specs->Specs[0].ColumnUserID); ascending = specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending;
@@ -541,7 +579,7 @@ struct StatisticsView::State {
                 Tip(Date(run).c_str());
                 ImGui::TableNextColumn();
                 const bool live = d.tracker->ActiveRunIndex() >= 0 && index == static_cast<size_t>(d.tracker->ActiveRunIndex());
-                if (live) { ImGui::TextColored(FcTheme::kXp, "%s", Status(d, index)); ImGui::SameLine(); }
+                if (live) { ImGui::TextColored(FcTheme::kXp, "%s", Tr(Status(d, index))); ImGui::SameLine(); }
                 ImGui::TextUnformatted(MapName(d, run).c_str()); Tip(run.mapName.c_str());
                 ImGui::TableNextColumn(); ImGui::TextColored(ValueColor(Stats::RunValue(run, currency)), "%s", Money(Stats::RunValue(run, currency), currency.kind).c_str());
                 ImGui::TableNextColumn(); ImGui::TextUnformatted(FcFormat::Duration(run.durationSec, true).c_str());
@@ -554,19 +592,22 @@ struct StatisticsView::State {
             ImGui::EndTable();
         }
         ResizeDown("##StatsRunsResize", runTableHeight, 120.f);
-        ImGui::TextDisabled("%zu runs - click a row for details", snapshot.rows.size());
+        ImGui::TextDisabled("%s", TrF("stats_runs_hint", { { "count", std::to_string(snapshot.rows.size()) } }).c_str());
     }
     void LootTable(const SettingsDeps& d, const char* id, const std::vector<Stats::LootTotal>& items, float& height) {
-        if (items.empty()) { ImGui::TextDisabled("No recorded loot in this selection."); return; }
+        if (items.empty()) { ImGui::TextDisabled("%s", Tr("stats_no_loot")); return; }
         const float scale = ImGui::GetFontSize() / 13.f;
-        const float quantityWidth = (std::max)(72.f * scale, ImGui::CalcTextSize("-9223372036854775808").x);
-        const float valueWidth = (std::max)(112.f * scale, ImGui::CalcTextSize(Money(-9999999.99, currency.kind).c_str()).x);
+        const float headerPad = 2 * ImGui::GetStyle().CellPadding.x;   // a header's own text fits too (any language)
+        const float quantityWidth = (std::max)({72.f * scale, ImGui::CalcTextSize("-9223372036854775808").x,
+            ImGui::CalcTextSize(Tr("stats_col_quantity")).x + headerPad});
+        const float valueWidth = (std::max)({112.f * scale, ImGui::CalcTextSize(Money(-9999999.99, currency.kind).c_str()).x,
+            ImGui::CalcTextSize(Tr("stats_col_recorded_value")).x + headerPad});
         const float innerWidth = TableInnerWidth(180.f * scale + quantityWidth + valueWidth + 6 * ImGui::GetStyle().CellPadding.x);
         if (ImGui::BeginTable(id, 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerH |
             ImGuiTableFlags_ScrollX | ImGuiTableFlags_PadOuterX, ImVec2(0, height), innerWidth)) {
-            ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Quantity", ImGuiTableColumnFlags_WidthFixed, quantityWidth);
-            ImGui::TableSetupColumn("Recorded value", ImGuiTableColumnFlags_WidthFixed, valueWidth);
+            ImGui::TableSetupColumn(TrId("col_item"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(TrId("stats_col_quantity"), ImGuiTableColumnFlags_WidthFixed, quantityWidth);
+            ImGui::TableSetupColumn(TrId("stats_col_recorded_value"), ImGuiTableColumnFlags_WidthFixed, valueWidth);
             ImGui::TableSetupScrollFreeze(0, 1); ImGui::TableHeadersRow();
             const float rowHeight = (std::max)(16.f, ImGui::GetTextLineHeight()) + 2 * ImGui::GetStyle().CellPadding.y;
             ImGuiListClipper clipper; clipper.Begin(static_cast<int>(items.size()), rowHeight);
@@ -588,18 +629,24 @@ struct StatisticsView::State {
     void Details(const SettingsDeps& d) {
         const auto& runs = d.tracker->Runs(); if (selected.index >= runs.size()) return;
         const auto& run = runs[selected.index];
-        ImGui::SeparatorText("Run details");
+        ImGui::SeparatorText(Tr("stats_run_details"));
         const auto& name = MapName(d, run);
         const std::string profit = Money(Stats::RunValue(run, currency), currency.kind);
-        const std::string duration = "in " + FcFormat::Duration(run.durationSec, true);
+        const std::string duration = TrF("stats_run_duration", { { "time", FcFormat::Duration(run.durationSec, true) } });
+        const auto resourcesLine = [](const std::string& gold, const std::string& hiveblood, const std::string& beacons) {
+            return TrF("stats_metric_gold", { { "count", gold } }) + " | " + TrF("stats_metric_hiveblood", { { "count", hiveblood } }) +
+                " | " + TrF("stats_metric_beacons", { { "count", beacons } });
+        };
+        const std::string resources = resourcesLine(FcFormat::Count(run.goldGain), std::to_string(run.hivebloodGain),
+            std::to_string(run.beaconGain));
         const std::string endDate = EndDate(run) + (run.archived ? "  #" + std::to_string(run.sessionId) : "");
         const char* status = Status(d, selected.index);
         const bool active = d.tracker->ActiveRunIndex() >= 0 && selected.index == static_cast<size_t>(d.tracker->ActiveRunIndex());
         const float iconSize = (std::max)(12.f, ImGui::GetTextLineHeight() * .9f);
         const float killWidth = 5.f * (iconSize + ImGui::CalcTextSize("999K").x + 8.f);
-        const float deleteWidth = ImGui::CalcTextSize("Delete run").x + 2 * ImGui::GetStyle().FramePadding.x;
+        const float deleteWidth = ImGui::CalcTextSize(Tr("stats_delete_run")).x + 2 * ImGui::GetStyle().FramePadding.x;
         const float summaryWidth = ImGui::CalcTextSize(name.c_str()).x + ImGui::CalcTextSize(profit.c_str()).x +
-            ImGui::CalcTextSize(duration.c_str()).x + killWidth + ImGui::CalcTextSize("Gold 9999999 | Hiveblood 999999 | Beacons 999").x +
+            ImGui::CalcTextSize(duration.c_str()).x + killWidth + ImGui::CalcTextSize(resourcesLine("9999999", "999999", "999").c_str()).x +
             ImGui::CalcTextSize(endDate.c_str()).x + deleteWidth + ImGui::GetStyle().ItemSpacing.x * 14 + 80.f;
         const bool summaryVisible = BeginMetricLine("##StatsRunSummary", summaryWidth);
         if (summaryVisible) {
@@ -610,25 +657,24 @@ struct StatisticsView::State {
             ImGui::TextColored(ValueColor(Stats::RunValue(run, currency)), "%s", profit.c_str()); separator();
             ImGui::TextDisabled("%s", duration.c_str()); separator();
             DrawKillIcons(d, run); separator();
-            ImGui::TextDisabled("Gold %s | Hiveblood %d | Beacons %d",
-                FcFormat::Count(run.goldGain).c_str(), run.hivebloodGain, run.beaconGain); separator();
-            ImGui::TextColored(StatusColor(status), "%s", StatusGlyph(status)); Tip(status);
+            ImGui::TextDisabled("%s", resources.c_str()); separator();
+            ImGui::TextColored(StatusColor(status), "%s", StatusGlyph(status)); Tip(Tr(status));
             ImGui::SameLine(0, 4); ImGui::TextDisabled("%s", endDate.c_str()); separator();
             ImGui::BeginDisabled(active);
-            if (ImGui::SmallButton("Delete run##StatsDeleteRun"))
-                pending = {Action::DeleteRun, selected, -1, "Delete the selected run and its recorded loot?"};
+            if (ImGui::SmallButton(TrId("stats_delete_run")))
+                pending = {Action::DeleteRun, selected, -1, Key("stats_confirm_delete_run")};
             ImGui::EndDisabled();
         }
         EndMetricLine(summaryVisible);
-        if (active) Tip("The current unfinished run cannot be deleted.");
+        if (active) Tip(Tr("stats_active_run_tip"));
         if (ImGui::BeginTabBar("##StatsDetails")) {
-            if (ImGui::BeginTabItem("Loot##StatsDetailLoot")) {
+            if (ImGui::BeginTabItem(TrId("stats_tab_run_loot"))) {
                 if (detailGeneration != generation) { detailLoot = Stats::AggregateLoot(runs, {selected.index}, currency); detailGeneration = generation; }
                 LootTable(d, "##StatsDetailLootTable", detailLoot, detailLootHeight); ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Map modifiers##StatsDetailMods")) {
+            if (ImGui::BeginTabItem(TrId("stats_tab_map_modifiers"))) {
                 if (ImGui::BeginChild("##StatsModifiers", ImVec2(0, detailModsHeight), ImGuiChildFlags_AlwaysUseWindowPadding)) {
-                    if (run.mapMods.empty()) ImGui::TextDisabled("No modifiers were recorded for this run.");
+                    if (run.mapMods.empty()) ImGui::TextDisabled("%s", Tr("stats_no_modifiers"));
                     for (const auto& modifier : run.mapMods) {
                         ImGui::PushStyleColor(ImGuiCol_Text, FcTheme::kMod); ImGui::TextWrapped("%s", modifier.c_str()); ImGui::PopStyleColor();
                     }
@@ -640,13 +686,13 @@ struct StatisticsView::State {
     }
     void Content(const SettingsDeps& d) {
         Overview(d);
-        Tip("Optional chart of the latest 24 completed runs in this selection. The table retains the full history.");
+        Tip(Tr("stats_trend_tip"));
         Trend(d);
         if (ImGui::BeginTabBar("##StatsViews")) {
-            if (ImGui::BeginTabItem("Map runs##StatsRunsTab")) { RunTable(d); Details(d); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Loot totals##StatsLootTab")) {
+            if (ImGui::BeginTabItem(TrId("stats_tab_map_runs"))) { RunTable(d); Details(d); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem(TrId("stats_tab_loot_totals"))) {
                 if (lootGeneration != generation) { lootTotals = Stats::AggregateLoot(d.tracker->Runs(), snapshot.rows, currency); lootGeneration = generation; }
-                ImGui::TextWrapped("Recorded loot across all %zu selected runs. Historical item prices are preserved.", snapshot.rows.size());
+                ImGui::TextWrapped("%s", TrF("stats_loot_totals_note", { { "count", std::to_string(snapshot.rows.size()) } }).c_str());
                 LootTable(d, "##StatsLootTotals", lootTotals, lootTotalsHeight);
                 ImGui::EndTabItem();
             }
@@ -667,7 +713,7 @@ struct StatisticsView::State {
                 for (size_t i = 0; i < runs.size(); ++i) if (runs[i].dbId == apply.run.id) { index = i; break; }
             } else if (apply.run.structure == d.tracker->HistoryStructureRevision()) index = apply.run.index;
             if (index < runs.size()) success = d.tracker->DeleteRunAt(static_cast<int>(index));
-            else error = "History changed. Select the run again before deleting it.";
+            else error = Key("stats_error_history_changed");
             break;
         }
         case Action::DeleteSession:
@@ -681,14 +727,14 @@ struct StatisticsView::State {
         default: break;
         }
         if (success) { dirty = true; error.clear(); pending = {}; }
-        else if (error.empty() && d.tracker->LastPersistenceError().empty()) error = "The history change could not be completed.";
+        else if (error.empty() && d.tracker->LastPersistenceError().empty()) error = Key("stats_error_change_failed");
         apply = {};
     }
 };
 StatisticsView::StatisticsView() : m_state(std::make_unique<State>()) {}
 StatisticsView::~StatisticsView() = default;
 void StatisticsView::Draw(const SettingsDeps& d) {
-    if (!d.tracker) { ImGui::TextDisabled("Statistics are unavailable."); return; }
+    if (!d.tracker) { ImGui::TextDisabled("%s", Tr("stats_unavailable")); return; }
     auto& state = *m_state; bool saveCurrency = false;
     const auto origin = ImGui::GetCursorScreenPos();
     ImGui::SetCursorScreenPos(ImVec2(origin.x + kViewInset, origin.y + kViewTopInset));

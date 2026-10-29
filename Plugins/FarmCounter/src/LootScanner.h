@@ -39,6 +39,7 @@ private:
     bool ReadPublished(std::unordered_map<std::string, InvSnapshot>& out, bool requireNew, uint64_t* scanStamp);
     const PluginSDK::Context* m_ctx = nullptr;
     PriceProvider* m_prices = nullptr;
+    ItemQuoteCache m_quotes;   // the host's by-item price answers for this area and price revision
     std::chrono::steady_clock::time_point m_lastScan{};
     bool m_pending = false;
     uint64_t m_lastConsumedStamp = 0;

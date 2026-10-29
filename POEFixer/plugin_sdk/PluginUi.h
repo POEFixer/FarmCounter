@@ -1,8 +1,11 @@
 // PluginUi.h — the plugin UI kit: the look of the host's own settings tabs
 // (Health Bars, Atlas) for plugin settings, plus a few in-game overlay helpers.
 //
-// Header-only. Depends only on Dear ImGui and the C/C++ standard library. All text
-// is passed in by the caller (plugins are not localized). Colours are taken from
+// Header-only. Depends on Dear ImGui, the C/C++ standard library and PluginI18n.h. All
+// text is passed in by the caller (translate it with PluginI18n.h's I18n::Tr / TrId); the
+// kit's own few labels ("Diagnostics", "Yes", "Clear", mouse and modifier key names) are
+// the host's texts in the program language (I18n::KitText, English on an older host,
+// keyboard key names always English). Colours are taken from
 // the LIVE ImGui style, which the host fills from the user's theme, so a plugin
 // follows every theme without naming one. Set ImGui's context from
 // ctx()->ImGuiContext at every entry point that draws (OnEnable, DrawUI,
@@ -26,7 +29,11 @@
 //   * Every non-obvious control gets a Tip(...) right after it (multi-line,
 //     wrapped). Put details behind "?", not in the label.
 //   * Dependent controls are dimmed (ImGui::BeginDisabled), never hidden.
-//   * Checkbox ids do not change with their text: Check("Label", "id", ...).
+//   * Checkbox ids do not change with their text: Check("Label", "id", ...). The kit
+//     builds every "<text>###<id>" itself: the id always whole, a text beyond about
+//     500 bytes (a long Thai label) cut on a character boundary. Your own labels with
+//     an id: I18n::TrId, or std::string(text) + "###" + id; never snprintf them into a
+//     fixed buffer (an overflow drops the id).
 //   * Two columns only when WideEnoughForTwoColumns(); otherwise stack. Test at
 //     narrow widths and at font scales 0.8-1.5 (tools/plugin_ui_preview renders
 //     your settings to PNG at several widths and scales without the game).
@@ -54,15 +61,66 @@
 // (std::min)/(std::max) are parenthesized: Windows.h may define min/max macros.
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"   // CurrentItemFlags: a swatch dims inside BeginDisabled
+#include "PluginI18n.h"                // KitText: the kit's own labels in the program language
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace PluginUi {
+
+// ---------------------------------------------------------------------------
+// Labels: the kit's "<text>###<id>" strings, built on the stack
+// ---------------------------------------------------------------------------
+namespace detail {
+// The size of a kit label buffer, NUL included. A translation may run three or four times the
+// English bytes (Thai), so a label is never formatted with a fixed-size printf, which would cut
+// the "###id" off (the widget's id would then change with the language) or split a character.
+inline constexpr size_t kLabelBytes = 512;
+
+// The longest prefix of `text` of at most `limit` bytes that ends on a UTF-8 character boundary.
+inline size_t Utf8Prefix(std::string_view text, size_t limit) {
+    if (text.size() <= limit) return text.size();
+    size_t n = limit;
+    while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80) --n;
+    return n;
+}
+
+inline std::string_view Sv(const char* text) { return text ? std::string_view(text) : std::string_view(); }
+
+// `parts` joined into out[size] (NUL-terminated), then "###<id>" when id is not null. The "###<id>"
+// is reserved first and written whole (it is cut only when it alone exceeds the buffer); the parts
+// give way, cut on a UTF-8 character boundary. So a widget keeps its ImGui id in every language
+// and at any length, and only an over-long text is shortened. Returns out.
+inline const char* JoinLabel(char* out, size_t size, std::initializer_list<std::string_view> parts,
+                             const char* id) {
+    if (!out || size == 0) return "";
+    const std::string_view idText = Sv(id);
+    const size_t idBytes = id ? (std::min)(3 + idText.size(), size - 1) : 0;
+    size_t room = size - 1 - idBytes;
+    size_t pos = 0;
+    const auto put = [&](std::string_view part) {
+        const size_t n = Utf8Prefix(part, room);
+        if (n != 0) std::memcpy(out + pos, part.data(), n);   // an empty part may have no data()
+        pos += n;
+        room -= n;
+        return n == part.size();
+    };
+    for (const std::string_view part : parts)
+        if (!put(part)) break;
+    if (id) {
+        room = idBytes;
+        if (put("###")) put(idText);
+    }
+    out[pos] = '\0';
+    return out;
+}
+} // namespace detail
 
 // ---------------------------------------------------------------------------
 // Colours, from the live style (the host writes the theme into it)
@@ -148,9 +206,9 @@ inline void HelpMarker(const char* text) {
 // accent colour. `help` puts a "?" right after the title, in a gap the separator
 // leaves for it, with the longer explanation as its tooltip.
 inline void Heading(const char* icon, const char* title, const char* help = nullptr) {
-    char buf[256];
-    if (icon && icon[0]) std::snprintf(buf, sizeof(buf), "%s  %s", icon, title ? title : "");
-    else std::snprintf(buf, sizeof(buf), "%s", title ? title : "");
+    char buf[detail::kLabelBytes];
+    if (icon && icon[0]) detail::JoinLabel(buf, sizeof(buf), { icon, "  ", detail::Sv(title) }, nullptr);
+    else detail::JoinLabel(buf, sizeof(buf), { detail::Sv(title) }, nullptr);
     const bool hasHelp = help && help[0];
     const float gap = hasHelp ? ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize("?").x : 0.0f;
     ImGui::PushStyleColor(ImGuiCol_Text, Colors().Accent);
@@ -184,8 +242,8 @@ inline void Hint(const char* text) {
 
 // Checkbox whose ImGui id ("###id") does not change with its text, with a tip.
 inline bool Check(const char* label, const char* id, bool* v, const char* tip = nullptr) {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s###%s", label ? label : "", id ? id : "");
+    char buf[detail::kLabelBytes];
+    detail::JoinLabel(buf, sizeof(buf), { detail::Sv(label) }, id ? id : "");
     const bool changed = ImGui::Checkbox(buf, v);
     Tip(tip);
     return changed;
@@ -293,12 +351,15 @@ inline void EndCard() {
 }
 
 inline bool BeginDiagnostics(const char* tip, const char* id) {
-    char buf[96];
+    const char* const diagId = id && id[0] ? id : "diag";
+    char buf[detail::kLabelBytes];
     // "\xef\x86\x88" is ICON_FA_BUG (U+F188) of the host's Font Awesome 6 font;
     // spelled out so the kit needs no icon header.
-    std::snprintf(buf, sizeof(buf), "\xef\x86\x88  Diagnostics###%s", id && id[0] ? id : "diag");
-    char cardId[64];
-    std::snprintf(cardId, sizeof(cardId), "##%sCard", id && id[0] ? id : "diag");
+    detail::JoinLabel(buf, sizeof(buf),
+                      { "\xef\x86\x88  ", detail::Sv(PluginSDK::I18n::KitText("plugin_kit_diagnostics", "Diagnostics")) },
+                      diagId);
+    char cardId[detail::kLabelBytes];
+    detail::JoinLabel(cardId, sizeof(cardId), { "##", diagId, "Card" }, nullptr);
     BeginCard(cardId);
     ImGui::PushStyleColor(ImGuiCol_Text, Colors().Accent);
     const bool open = ImGui::TreeNodeEx(buf, ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding |
@@ -357,9 +418,11 @@ inline bool Combo(const char* id, int& value, const char* const* items, int coun
     const int current = std::clamp(value, 0, count - 1);
     bool changed = false;
     if (ImGui::BeginCombo(id, items[current] ? items[current] : "")) {
-        char buf[256];
+        char buf[detail::kLabelBytes];
+        char itemId[24];
         for (int i = 0; i < count; ++i) {
-            std::snprintf(buf, sizeof(buf), "%s###item%d", items[i] ? items[i] : "", i);
+            std::snprintf(itemId, sizeof(itemId), "item%d", i);
+            detail::JoinLabel(buf, sizeof(buf), { detail::Sv(items[i]) }, itemId);
             if (ImGui::Selectable(buf, i == current)) {
                 value = i;
                 changed = true;
@@ -402,8 +465,8 @@ inline bool InputStringMultiline(const char* id, std::string& text, const ImVec2
 // CollapsingHeader it stays inside a card's padding. Returns true while open; the
 // caller draws the content and calls NO TreePop.
 inline bool Disclosure(const char* label, const char* id, bool defaultOpen = false) {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s###%s", label ? label : "", id ? id : "disclosure");
+    char buf[detail::kLabelBytes];
+    detail::JoinLabel(buf, sizeof(buf), { detail::Sv(label) }, id ? id : "disclosure");
     ImGui::PushStyleColor(ImGuiCol_Text, Colors().Accent);
     const bool open = ImGui::TreeNodeEx(buf, ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen |
                                                  (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0));
@@ -412,22 +475,25 @@ inline bool Disclosure(const char* label, const char* id, bool defaultOpen = fal
 }
 
 // A small NON-modal confirmation, opened with ImGui::OpenPopup(id). Returns true
-// on the frame the yes button is pressed.
-inline bool ConfirmPopup(const char* id, const char* text, const char* yes = "Yes", const char* no = "Cancel") {
+// on the frame the yes button is pressed. yes / no default to the host's "Yes" /
+// "Cancel" in the program language.
+inline bool ConfirmPopup(const char* id, const char* text, const char* yes = nullptr, const char* no = nullptr) {
     bool confirmed = false;
     if (ImGui::BeginPopup(id)) {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
         ImGui::TextUnformatted(text ? text : "");
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "%s###yes", yes ? yes : "Yes");
+        char buf[detail::kLabelBytes];
+        detail::JoinLabel(buf, sizeof(buf), { detail::Sv(yes ? yes : PluginSDK::I18n::KitText("plugin_kit_yes", "Yes")) },
+                          "yes");
         if (ImGui::Button(buf)) {
             confirmed = true;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        std::snprintf(buf, sizeof(buf), "%s###no", no ? no : "Cancel");
+        detail::JoinLabel(buf, sizeof(buf),
+                          { detail::Sv(no ? no : PluginSDK::I18n::KitText("plugin_kit_cancel", "Cancel")) }, "no");
         if (SubtleButton(buf)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
@@ -526,37 +592,44 @@ inline ImGuiID& CapturingId() {
 inline bool IsCapturingHotkey() { return detail::CapturingId() != 0; }
 
 // Name of a virtual-key code: "F5", "Mouse 4", "None" for 0, "Key 0xNN" otherwise.
-// The returned pointer is static storage (the hex form: one buffer, valid until
-// the next call).
+// Mouse buttons, the side-specific modifiers, "None" and "Key {code}" are the host's
+// texts in the program language; keyboard key names stay English. The returned
+// pointer stays valid (the hex form: one buffer, valid until the next call).
 inline const char* KeyName(int vk) {
+    using PluginSDK::I18n::KitText;
     switch (vk) {
-    case 0: return "None";
-    case 0x01: return "Left Mouse";
-    case 0x02: return "Right Mouse";
-    case 0x04: return "Middle Mouse";
-    case 0x05: return "Mouse 4";
-    case 0x06: return "Mouse 5";
+    case 0: return KitText("plugin_kit_key_none", "None");
+    case 0x01: return KitText("plugin_kit_mouse_left", "Left Mouse");
+    case 0x02: return KitText("plugin_kit_mouse_right", "Right Mouse");
+    case 0x04: return KitText("plugin_kit_mouse_middle", "Middle Mouse");
+    case 0x05: return KitText("plugin_kit_mouse_4", "Mouse 4");
+    case 0x06: return KitText("plugin_kit_mouse_5", "Mouse 5");
     // Side-specific codes saved by older GetAsyncKeyState-based captures.
-    case 0xA0: return "Left Shift";
-    case 0xA1: return "Right Shift";
-    case 0xA2: return "Left Ctrl";
-    case 0xA3: return "Right Ctrl";
-    case 0xA4: return "Left Alt";
-    case 0xA5: return "Right Alt";
+    case 0xA0: return KitText("plugin_kit_left_shift", "Left Shift");
+    case 0xA1: return KitText("plugin_kit_right_shift", "Right Shift");
+    case 0xA2: return KitText("plugin_kit_left_ctrl", "Left Ctrl");
+    case 0xA3: return KitText("plugin_kit_right_ctrl", "Right Ctrl");
+    case 0xA4: return KitText("plugin_kit_left_alt", "Left Alt");
+    case 0xA5: return KitText("plugin_kit_right_alt", "Right Alt");
     default: break;
     }
     int count = 0;
     const detail::KeyRow* rows = detail::KeyTable(count);
     for (int i = 0; i < count; ++i)
         if (rows[i].vk == vk) return rows[i].name;
-    static char buf[16];
-    std::snprintf(buf, sizeof(buf), "Key 0x%02X", vk & 0xFF);
+    char code[8];
+    std::snprintf(code, sizeof(code), "0x%02X", vk & 0xFF);
+    static char buf[96];
+    PluginSDK::I18n::Detail::CopyUtf8(
+        PluginSDK::I18n::Detail::Format(KitText("plugin_kit_key_code", "Key {code}"), { { "code", code } }), buf,
+        sizeof(buf));
     return buf;
 }
 
 // A key binding button: shows the bound key; click it, then press a key or a
 // mouse button (right, middle, 4, 5) to bind it, Esc or a click elsewhere to
-// cancel. With allowClear a quiet "Clear" button sets it to 0 (None). Stores a
+// cancel. With allowClear a quiet "Clear" button sets it to 0 (None). Its labels
+// are the host's texts in the program language (KitText). Stores a
 // Windows virtual-key code. Returns true when *vk changed. `id` must be unique
 // in the window ("##hotkey").
 inline bool HotkeyCapture(const char* id, int* vk, const char* tip = nullptr, bool allowClear = true) {
@@ -567,9 +640,11 @@ inline bool HotkeyCapture(const char* id, int* vk, const char* tip = nullptr, bo
     ImGuiID& capturing = detail::CapturingId();
     const bool waiting = capturing == self;
 
-    char label[96];
-    if (waiting) std::snprintf(label, sizeof(label), "Press a key... (Esc cancels)###capture");
-    else std::snprintf(label, sizeof(label), "%s###capture", KeyName(*vk));
+    char label[detail::kLabelBytes];
+    detail::JoinLabel(label, sizeof(label),
+                      { detail::Sv(waiting ? PluginSDK::I18n::KitText("plugin_kit_press_key", "Press a key... (Esc cancels)")
+                                           : KeyName(*vk)) },
+                      "capture");
     const float minW = ImGui::GetFontSize() * 7.0f;
     const float w = (std::max)(minW, ButtonWidth(label));
     // Idle it reads like a field (quiet surface); waiting it takes the theme's
@@ -607,12 +682,15 @@ inline bool HotkeyCapture(const char* id, int* vk, const char* tip = nullptr, bo
     if (allowClear) {
         ImGui::SameLine();
         ImGui::BeginDisabled(*vk == 0 && !waiting);
-        if (SubtleButton("Clear###clear")) {
+        char clearLabel[detail::kLabelBytes];
+        detail::JoinLabel(clearLabel, sizeof(clearLabel), { detail::Sv(PluginSDK::I18n::KitText("plugin_kit_clear", "Clear")) },
+                          "clear");
+        if (SubtleButton(clearLabel)) {
             if (capturing == self) capturing = 0;
             if (*vk != 0) { *vk = 0; changed = true; }
         }
         ImGui::EndDisabled();
-        Tip("Removes the binding.");
+        Tip(PluginSDK::I18n::KitText("plugin_kit_clear_tip", "Removes the binding."));
     }
     ImGui::PopID();
     return changed;

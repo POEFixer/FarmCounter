@@ -9,11 +9,16 @@
 //
 // Destructive actions use INLINE two-step confirm buttons, never popups/modals
 // (modals freeze when the host runs in overlay mode).
+//
+// Texts follow the program language (Text.h): every widget whose label is its
+// ImGui id takes I18n::TrId, so its id stays the key's in every language.
 #include "Settings.h"
 #include "StatisticsView.h"
 #include "ZonesView.h"
 #include "Theme.h"
 #include "Formatting.h"
+#include "Text.h"
+#include "../LootRows.h"
 #include "../../../../POEFixer/plugin_sdk/PluginUi.h"
 
 #include <imgui.h>
@@ -28,6 +33,13 @@
 
 namespace {
 
+using FcText::I18n::Key;
+using FcText::I18n::Tr;
+using FcText::I18n::TrF;
+using FcText::I18n::TrId;
+using FcText::Num;
+using FcText::Show;
+
 std::string FormatThousands(long long n) {
     std::string s = std::to_string(n);
     const int stop = (n < 0) ? 1 : 0;   // don't split a leading minus
@@ -35,10 +47,10 @@ std::string FormatThousands(long long n) {
     return s;
 }
 
-// Builds an icon-prefixed tab label ("<glyph>  Name"). The glyph bytes are pure
-// ASCII escapes (see Theme.h) so this stays a single-allocation per frame.
-std::string TabLabel(const char* glyph, const char* name) {
-    return std::string(glyph) + "  " + name;
+// Builds an icon-prefixed tab label ("<glyph>  <text>###<key>"). The glyph bytes are
+// pure ASCII escapes (see Theme.h); the ###key keeps the tab's id in every language.
+std::string TabLabel(const char* glyph, const char* key) {
+    return std::string(glyph) + "  " + TrId(key);
 }
 
 // Red SmallButton styling for destructive actions.
@@ -51,82 +63,101 @@ struct DangerButtonColors {
     ~DangerButtonColors() { ImGui::PopStyleColor(3); }
 };
 
+// Two short values on one line, one em apart (layout is code, never spacing in a text).
+void Gap() { ImGui::SameLine(0.f, ImGui::GetFontSize()); }
+
+// A dimmed note wrapped at the tab's edge (a translation runs longer than the English line).
+void Note(const char* text) {
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextDisabled("%s", text);
+    ImGui::PopTextWrapPos();
+}
+
+// Width of a slider whose label sits on its right: `wantEm` wide, narrower when the
+// translated label would run past the edge, never below six em.
+float WidthBesideLabel(float wantEm, const char* label) {
+    const float em = ImGui::GetFontSize();
+    const float room = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(label).x -
+                       ImGui::GetStyle().ItemInnerSpacing.x;
+    return std::clamp(room, em * 6.f, em * wantEm);
+}
+
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
 void DrawSettingsTab(const SettingsDeps& d) {
     OverlaySettings& s = *d.settings;
     auto save = [&] { SaveSettings(d.dir, s); };
 
-    ImGui::SeparatorText("Overlay");
-    if (ImGui::Checkbox("Enable Overlay Mode", &s.wantsOverlay))      save();
-    if (PluginUi::Check("Show the counter window", "showWindow", &s.showWindow,
-                        "Shows the farming counter window.\n"
-                        "Hover it while this tab is open for its gear menu: lock it, take it out\n"
-                        "of the game onto any screen, reset its position or close it.\n"
-                        "Close turns this off."))
+    ImGui::SeparatorText(Tr("settings_section_overlay"));
+    if (ImGui::Checkbox(TrId("settings_enable_overlay"), &s.wantsOverlay)) save();
+    if (PluginUi::Check(Tr("settings_show_window"), "showWindow", &s.showWindow,
+                        Tr("settings_show_window_tip")))
         save();
-    if (ImGui::Checkbox("Show Item List",      &s.showItems))         save();
-    ImGui::SetNextItemWidth(160.f);
-    if (ImGui::SliderInt("Visible item rows", &s.visibleItemRows, 1, 50, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+    if (ImGui::Checkbox(TrId("settings_show_item_list"), &s.showItems)) save();
+    ImGui::SetNextItemWidth(WidthBesideLabel(12.f, Tr("settings_visible_item_rows")));
+    if (ImGui::SliderInt(TrId("settings_visible_item_rows"), &s.visibleItemRows, 1, 50, "%d", ImGuiSliderFlags_AlwaysClamp)) {
         s.visibleItemRows = std::clamp(s.visibleItemRows, 1, 50);
         save();
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Show the highest total stack values first. Full loot totals and history are retained.");
-    if (ImGui::Checkbox("Show Unpriced Items", &s.showUnpriced))      save();
-    if (ImGui::Checkbox("Show Profit/Hour",    &s.showProfitPerHour)) save();
-    if (ImGui::Checkbox("Show Gold (total + map gain)", &s.goldShow)) save();
+    PluginUi::Tip(Tr("settings_visible_item_rows_tip"));
+    if (ImGui::Checkbox(TrId("settings_show_unpriced"), &s.showUnpriced)) save();
+    if (ImGui::Checkbox(TrId("settings_show_profit_per_hour"), &s.showProfitPerHour)) save();
+    if (ImGui::Checkbox(TrId("settings_show_gold"), &s.goldShow)) save();
 
-    ImGui::SeparatorText("Experience");
-    if (ImGui::Checkbox("Show XP/Hour in overlay", &s.showXpPerHour)) save();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Hiding this card keeps the XP measurement running.");
-    if (ImGui::SmallButton("Reset XP measurement")) d.tracker->ResetExperience();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Resets only the XP/hour measurement. Current-map XP, loot and farm statistics are kept.");
-    ImGui::TextDisabled("Net XP includes death losses. Uses active farming time.");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("The measurement pauses with farming (including hideout and the Esc menu).\nSwitching character starts a new XP measurement.");
+    ImGui::SeparatorText(Tr("settings_section_experience"));
+    if (ImGui::Checkbox(TrId("settings_show_xp_per_hour"), &s.showXpPerHour)) save();
+    PluginUi::Tip(Tr("settings_show_xp_per_hour_tip"));
+    if (ImGui::SmallButton(TrId("settings_reset_xp"))) d.tracker->ResetExperience();
+    PluginUi::Tip(Tr("settings_reset_xp_tip"));
+    Note(Tr("settings_xp_note"));
+    PluginUi::Tip(Tr("settings_xp_note_tip"));
     const auto& xp = d.tracker->Experience();
     if (xp.HasSample()) {
-        ImGui::Text("Level %u  |  %s XP  |  %s XP/h  |  %s%s",
-                    static_cast<unsigned>(xp.Level()),
-                    FcFormat::Count(static_cast<double>(xp.GainedXp()), true).c_str(),
-                    FcFormat::Count(xp.XpPerHour()).c_str(),
-                    FcFormat::Duration(xp.ActiveSeconds()).c_str(), xp.IsRunning() ? "" : " (paused)");
+        // "Level 91  |  +1.23M XP  |  45K XP/h  |  1h 05m": the separators are layout (code).
+        std::string line = TrF("settings_xp_level", { { "level", std::to_string(static_cast<unsigned>(xp.Level())) } });
+        line += "  |  " + TrF("settings_xp_gained", { { "xp", FcFormat::Count(static_cast<double>(xp.GainedXp()), true) } });
+        line += "  |  " + TrF("settings_xp_rate", { { "rate", FcFormat::Count(xp.XpPerHour()) } });
+        line += "  |  " + FcFormat::Duration(xp.ActiveSeconds());
+        if (!xp.IsRunning()) line += std::string(" ") + Tr("settings_xp_paused");
+        Show(line);
     } else {
-        ImGui::TextDisabled("Waiting for character XP.");
+        Note(Tr("settings_xp_waiting"));
     }
     if (d.tracker->MapExperience().HasSample())
-        ImGui::Text("Current map: %s XP", FcFormat::Count(static_cast<double>(d.tracker->MapExperience().GainedXp()), true).c_str());
+        Show(TrF("settings_xp_current_map",
+                 { { "xp", FcFormat::Count(static_cast<double>(d.tracker->MapExperience().GainedXp()), true) } }));
 
-    ImGui::SeparatorText("Display");
-    ImGui::TextUnformatted("Overlay currency:");
-    const char* currencies[] = { "Exalted", "Divine", "Chaos" };
-    ImGui::SetNextItemWidth(130.f);
-    if (ImGui::Combo("##OvCur", &s.overlayCurrency, currencies, 3)) save();
-    if (ImGui::SliderFloat("Opacity", &s.windowAlpha, 0.1f, 1.0f, "%.1f")) save();
+    ImGui::SeparatorText(Tr("settings_section_display"));
+    ImGui::TextUnformatted(Tr("settings_overlay_currency"));
+    const char* currencyTexts[] = { Tr(FcText::kCurrencyKeys[0]), Tr(FcText::kCurrencyKeys[1]),
+                                    Tr(FcText::kCurrencyKeys[2]) };
+    ImGui::SetNextItemWidth(FcText::ComboWidthFor(ImGui::GetFontSize() * 8.f, currencyTexts, 3));
+    if (FcText::KeyCombo("##OvCur", s.overlayCurrency, FcText::kCurrencyKeys, 3)) save();
+    if (ImGui::SliderFloat(TrId("settings_opacity"), &s.windowAlpha, 0.1f, 1.0f, "%.1f")) save();
 
     // Read-only readout of the core price service (the core app owns the league
     // and refresh schedule — Configuration -> Settings in POEFixer).
-    ImGui::SeparatorText("Prices");
+    ImGui::SeparatorText(Tr("settings_section_prices"));
     {
         const PluginSDK::PriceStatus st = d.prices->Status();
         if (st.loaded) {
-            ImGui::Text("Price DB: %d items", st.totalItems);
+            Show(TrF("settings_price_db", { { "count", std::to_string(st.totalItems) } }));
             const float divInChaos = d.prices->DivineInChaos();
             const float exInChaos  = d.prices->ExaltedInChaos();
-            if (divInChaos > 1.f && exInChaos > 1.f)
-                ImGui::Text("1 div = %.1f c   1 ex = %.1f c", divInChaos, exInChaos);
+            if (divInChaos > 1.f && exInChaos > 1.f) {
+                Show(TrF("settings_rate_divine", { { "chaos", Num("%.1f", divInChaos) } }));
+                Gap();
+                Show(TrF("settings_rate_exalted", { { "chaos", Num("%.1f", exInChaos) } }));
+            }
             if (st.catsFailed > 0)
-                ImGui::TextColored(ImVec4(1.f, .8f, .2f, 1.f),
-                                   "%d price categories failed to load", st.catsFailed);
+                ImGui::TextColored(ImVec4(1.f, .8f, .2f, 1.f), "%s",
+                                   TrF("settings_price_categories_failed", { { "count", std::to_string(st.catsFailed) } }).c_str());
         } else if (st.catsPending > 0) {
-            ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "Fetching prices...");
+            ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "%s", Tr("settings_prices_fetching"));
         } else {
-            ImGui::TextDisabled("No price data yet");
+            Note(Tr("settings_prices_none"));
         }
-        ImGui::TextDisabled("League is configured in POEFixer Settings.");
+        Note(Tr("settings_league_note"));
     }
 }
 
@@ -141,34 +172,22 @@ void DrawCustomPricesTab(const SettingsDeps& d) {
     static bool        s_editMode    = false;
 
     // ── Unpriced items in inventory ────────────────────────────────────────────
-    ImGui::SeparatorText("Unpriced items in inventory");
-    // Recomputed at most once per second: each miss is a whole-DB fuzzy scan in
-    // the host, and the snapshot itself only refreshes at ~1 Hz — per-frame
-    // lookups here made the tab stutter for nothing.
-    static std::vector<std::string> s_unpriced;
-    static std::chrono::steady_clock::time_point s_unpricedAt{};
-    {
-        auto now = std::chrono::steady_clock::now();
-        if (now - s_unpricedAt >= std::chrono::seconds(1)) {
-            s_unpricedAt = now;
-            s_unpriced.clear();
-            for (const auto& [key, sn] : snap)
-                if (!pp.Lookup(sn.name).found) s_unpriced.push_back(sn.name);  // core OR custom miss
-            std::sort(s_unpriced.begin(), s_unpriced.end());
-        }
-    }
-    const std::vector<std::string>& unpriced = s_unpriced;
+    ImGui::SeparatorText(Tr("prices_section_unpriced"));
+    // As the last backpack read priced the items (by the item itself, custom prices included):
+    // never asked again by the shown name, which would list an item priced by what it is (and
+    // invite a custom price on its localized name that overrides the market price).
+    const std::vector<std::string> unpriced = UnpricedNames(snap);
 
     if (unpriced.empty()) {
-        ImGui::TextDisabled("All items have prices.");
+        ImGui::TextDisabled("%s", Tr("prices_all_priced"));
     } else {
         float listH = ImGui::GetTextLineHeightWithSpacing()
             * (float)(unpriced.size() < 6 ? unpriced.size() + 1 : 6);
         if (ImGui::BeginTable("##UPT", 2,
                 ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
                 ImVec2(0, listH))) {
-            ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("##add", ImGuiTableColumnFlags_WidthFixed, 80.f);
+            ImGui::TableSetupColumn(TrId("col_item"), ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("##add", ImGuiTableColumnFlags_WidthFixed, 0.f);   // fits its button
             ImGui::TableHeadersRow();
             for (const auto& name : unpriced) {
                 auto it = snap.find(name);
@@ -181,7 +200,7 @@ void DrawCustomPricesTab(const SettingsDeps& d) {
                 ImGui::TextUnformatted(display.c_str());
                 ImGui::TableNextColumn();
                 ImGui::PushID(name.c_str());
-                if (ImGui::SmallButton("Set price")) {
+                if (ImGui::SmallButton(TrId("prices_set_price"))) {
                     s_editName = name;
                     // only set base when item is actually unique (has both names)
                     s_editBase = (it != snap.end() && !it->second.uniqueName.empty())
@@ -198,13 +217,13 @@ void DrawCustomPricesTab(const SettingsDeps& d) {
     // ── Set / edit a custom price (exalted value -> chaos via current rate) ─────
     if (s_editMode) {
         ImGui::Spacing();
-        ImGui::SeparatorText("Set custom price");
-        if (!s_editBase.empty()) ImGui::Text("Item: %s - %s", s_editName.c_str(), s_editBase.c_str());
-        else                     ImGui::Text("Item: %s", s_editName.c_str());
-        ImGui::SetNextItemWidth(120.f);
-        ImGui::InputText("ex value##ep", s_editBuf, sizeof(s_editBuf), ImGuiInputTextFlags_CharsDecimal);
+        ImGui::SeparatorText(Tr("prices_section_set"));
+        if (!s_editBase.empty()) Show(TrF("prices_item_with_base", { { "name", s_editName }, { "base", s_editBase } }));
+        else                     Show(TrF("prices_item", { { "name", s_editName } }));
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9.f);
+        ImGui::InputText(TrId("prices_ex_value"), s_editBuf, sizeof(s_editBuf), ImGuiInputTextFlags_CharsDecimal);
         ImGui::SameLine();
-        if (ImGui::Button("Save##ep")) {
+        if (ImGui::Button(TrId("prices_save"))) {
             try {
                 float valEx = std::stof(s_editBuf);
                 if (valEx > 0.f) {
@@ -218,15 +237,15 @@ void DrawCustomPricesTab(const SettingsDeps& d) {
             s_editMode = false;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel##ep")) s_editMode = false;
+        if (ImGui::Button(TrId("prices_cancel"))) s_editMode = false;
     }
 
     // ── Existing custom prices ─────────────────────────────────────────────────
     ImGui::Spacing();
-    ImGui::SeparatorText("Custom prices");
+    ImGui::SeparatorText(Tr("prices_section_custom"));
     (void)exRate;
     if (pp.Custom().empty()) {
-        ImGui::TextDisabled("No custom prices set.");
+        ImGui::TextDisabled("%s", Tr("prices_none"));
         return;
     }
 
@@ -237,9 +256,10 @@ void DrawCustomPricesTab(const SettingsDeps& d) {
             ImGuiTableFlags_BordersOuter | ImGuiTableFlags_RowBg |
             ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY,
             ImVec2(0, tableH))) {
-        ImGui::TableSetupColumn("Item",  ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Exalt", ImGuiTableColumnFlags_WidthFixed, 70.f);
-        ImGui::TableSetupColumn("##ops", ImGuiTableColumnFlags_WidthFixed, 110.f);
+        // Fixed columns at width 0 fit their translated header and cells (no Resizable flag).
+        ImGui::TableSetupColumn(TrId("col_item"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(TrId("prices_col_exalted"), ImGuiTableColumnFlags_WidthFixed, 0.f);
+        ImGui::TableSetupColumn("##ops", ImGuiTableColumnFlags_WidthFixed, 0.f);
         ImGui::TableHeadersRow();
 
         std::string toDelete;
@@ -252,10 +272,10 @@ void DrawCustomPricesTab(const SettingsDeps& d) {
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(displayName.c_str());
-            ImGui::TableNextColumn(); ImGui::Text("%.3f ex", exalts);
+            ImGui::TableNextColumn(); Show(TrF("prices_value_ex", { { "value", Num("%.3f", exalts) } }));
             ImGui::TableNextColumn();
             ImGui::PushID(key.c_str());
-            if (ImGui::SmallButton("Edit")) {
+            if (ImGui::SmallButton(TrId("prices_edit"))) {
                 s_editName = uname;
                 s_editBase = bname;
                 snprintf(s_editBuf, sizeof(s_editBuf), "%.4g", exalts);
@@ -264,7 +284,7 @@ void DrawCustomPricesTab(const SettingsDeps& d) {
             ImGui::SameLine();
             {
                 DangerButtonColors danger;
-                if (ImGui::SmallButton("Delete")) toDelete = key;
+                if (ImGui::SmallButton(TrId("prices_delete"))) toDelete = key;
             }
             ImGui::PopID();
         }
@@ -290,67 +310,72 @@ void DrawHivebloodTab(const SettingsDeps& d) {
     OverlaySettings& s = *d.settings;
     auto save = [&] { SaveSettings(d.dir, s); };
 
-    ImGui::SeparatorText("Hiveblood");
-    if (ImGui::Checkbox("Show Hiveblood in overlay", &s.hbShow))      save();
+    ImGui::SeparatorText(Tr("hive_section"));
+    if (ImGui::Checkbox(TrId("hive_show"), &s.hbShow))      save();
     ImGui::Spacing();
-    if (ImGui::Checkbox("Warn near cap (100,000)", &s.hbWarnNearCap)) save();
-    if (ImGui::SliderInt("Warn threshold", &s.hbWarnThreshold, 50000, 100000)) save();
-    if (ImGui::Checkbox("Show map gains", &s.hbShowMapGains))         save();
+    const std::string warnLabel = TrF("hive_warn_near_cap", { { "cap", FormatThousands(100000) } }) + "###hive_warn_near_cap";
+    if (ImGui::Checkbox(warnLabel.c_str(), &s.hbWarnNearCap)) save();
+    if (ImGui::SliderInt(TrId("hive_warn_threshold"), &s.hbWarnThreshold, 50000, 100000)) save();
+    if (ImGui::Checkbox(TrId("hive_show_map_gains"), &s.hbShowMapGains)) save();
 
-    ImGui::SeparatorText("Live");
+    ImGui::SeparatorText(Tr("live_section"));
     const ResourceReaders::HbState hb = d.resources->Hiveblood();
     if (hb.ok && !hb.cached)
-        ImGui::TextColored(FcTheme::kHive, "Current: %s", FormatThousands(hb.total).c_str());
+        ImGui::TextColored(FcTheme::kHive, "%s", TrF("hive_current", { { "value", FormatThousands(hb.total) } }).c_str());
     else if (hb.ok && hb.cached)
-        ImGui::Text("Current: %s (last seen)", FormatThousands(hb.total).c_str());
+        Show(TrF("hive_current_cached", { { "value", FormatThousands(hb.total) } }));
     else
-        ImGui::TextDisabled("Current: not read yet (visit a map or the tree)");
+        ImGui::TextDisabled("%s", Tr("hive_not_read"));
 }
 
 void DrawBeaconsTab(const SettingsDeps& d) {
     OverlaySettings& s = *d.settings;
     auto save = [&] { SaveSettings(d.dir, s); };
 
-    ImGui::SeparatorText("Atziri Beacons");
-    ImGui::TextDisabled("Temple entry counter (N / 60), read from the game UI.");
-    if (ImGui::Checkbox("Show Atziri Beacons overlay", &s.itShow))      save();
-    if (ImGui::Checkbox("Sound on beacon gain", &s.itSound))            save();
+    ImGui::SeparatorText(Tr("atziri_section"));
+    ImGui::TextDisabled("%s", Tr("atziri_note"));
+    if (ImGui::Checkbox(TrId("atziri_show"), &s.itShow))         save();
+    if (ImGui::Checkbox(TrId("atziri_sound"), &s.itSound))       save();
     if (s.itSound) {
-        ImGui::SetNextItemWidth(160.f);
-        if (ImGui::SliderFloat("Volume##itVol", &s.itVolume, 0.f, 1.f, "%.2f")) save();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.f);
+        if (ImGui::SliderFloat(TrId("atziri_volume"), &s.itVolume, 0.f, 1.f, "%.2f")) save();
         ImGui::SameLine();
-        if (ImGui::Button("Test##itSnd") && d.onTestSound) d.onTestSound(s.itVolume);
+        if (ImGui::Button(TrId("atziri_test")) && d.onTestSound) d.onTestSound(s.itVolume);
     }
-    if (ImGui::Checkbox("Show as separate window", &s.itSeparate))      save();
+    if (ImGui::Checkbox(TrId("atziri_separate"), &s.itSeparate)) save();
 
-    ImGui::SeparatorText("Live");
+    ImGui::SeparatorText(Tr("live_section"));
     const ResourceReaders::ItState it = d.resources->Incursion();
     if (it.ok)
-        ImGui::TextColored(FcTheme::kIncur, "Current: %d / %d", it.cur, it.max);
+        ImGui::TextColored(FcTheme::kIncur, "%s", TrF("atziri_current",
+            { { "current", std::to_string(it.cur) }, { "max", std::to_string(it.max) } }).c_str());
     else
-        ImGui::TextDisabled("Beacon counter not visible yet (it is searched for periodically)");
+        ImGui::TextDisabled("%s", Tr("atziri_not_visible"));
 }
 
 void DrawKillsTab(const SettingsDeps& d) {
     OverlaySettings& s = *d.settings;
     auto save = [&] { SaveSettings(d.dir, s); };
 
-    ImGui::SeparatorText("Kill Counter");
-    if (ImGui::Checkbox("Show kill counter in overlay", &s.kcShow)) save();
+    ImGui::SeparatorText(Tr("kills_section"));
+    if (ImGui::Checkbox(TrId("kills_show"), &s.kcShow)) save();
     ImGui::Spacing();
-    ImGui::TextDisabled("Show per rarity:");
-    if (ImGui::Checkbox("Normal##kc", &s.kcShowNormal)) save(); ImGui::SameLine();
-    if (ImGui::Checkbox("Magic##kc",  &s.kcShowMagic))  save(); ImGui::SameLine();
-    if (ImGui::Checkbox("Rare##kc",   &s.kcShowRare))   save(); ImGui::SameLine();
-    if (ImGui::Checkbox("Unique##kc", &s.kcShowUnique)) save(); ImGui::SameLine();
-    if (ImGui::Checkbox("Rogue Exiles##kc", &s.kcShowRogue)) save();
+    ImGui::TextDisabled("%s", Tr("kills_per_rarity"));
+    if (ImGui::Checkbox(TrId("kills_normal"), &s.kcShowNormal)) save(); ImGui::SameLine();
+    if (ImGui::Checkbox(TrId("kills_magic"),  &s.kcShowMagic))  save(); ImGui::SameLine();
+    if (ImGui::Checkbox(TrId("kills_rare"),   &s.kcShowRare))   save(); ImGui::SameLine();
+    if (ImGui::Checkbox(TrId("kills_unique"), &s.kcShowUnique)) save(); ImGui::SameLine();
+    if (ImGui::Checkbox(TrId("kills_rogue"),  &s.kcShowRogue))  save();
 
-    ImGui::SeparatorText("Counts (current area)");
-    ImGui::Text("Normal: %d  Magic: %d  Rare: %d  Unique: %d  Rogue: %d  Total: %d",
-                d.kills->Normal(), d.kills->Magic(), d.kills->Rare(),
-                d.kills->Unique(), d.kills->Rogue(), d.kills->Total());
-    if (ImGui::SmallButton("Reset##kc")) d.kills->Reset();
-    ImGui::TextDisabled("Per-run and per-session kill totals live in the Statistics tab.");
+    ImGui::SeparatorText(Tr("kills_section_counts"));
+    Show(TrF("kills_count_normal", { { "count", std::to_string(d.kills->Normal()) } }));  Gap();
+    Show(TrF("kills_count_magic",  { { "count", std::to_string(d.kills->Magic()) } }));   Gap();
+    Show(TrF("kills_count_rare",   { { "count", std::to_string(d.kills->Rare()) } }));    Gap();
+    Show(TrF("kills_count_unique", { { "count", std::to_string(d.kills->Unique()) } }));  Gap();
+    Show(TrF("kills_count_rogue",  { { "count", std::to_string(d.kills->Rogue()) } }));   Gap();
+    Show(TrF("kills_count_total",  { { "count", std::to_string(d.kills->Total()) } }));
+    if (ImGui::SmallButton(TrId("kills_reset"))) d.kills->Reset();
+    ImGui::TextDisabled("%s", Tr("kills_stats_note"));
 }
 
 } // namespace
@@ -360,12 +385,12 @@ void RenderSettings(const SettingsDeps& d) {
         return;
 
     if (!ImGui::BeginTabBar("##FCTabs")) return;
-    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Trophy,  "Settings").c_str()))      { DrawSettingsTab(d);     ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Item,    "Custom Prices").c_str())) { DrawCustomPricesTab(d); ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Profit,  "Statistics").c_str()))    { DrawStatisticsTab(d);   ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Map,     "Zones").c_str()))         { DrawZonesTab(d);        ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Session, "Hiveblood").c_str()))     { DrawHivebloodTab(d);    ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Sword,   "Atziri").c_str()))        { DrawBeaconsTab(d);      ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Kills,   "Kills").c_str()))         { DrawKillsTab(d);        ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Trophy, Key("tab_settings")).c_str()))      { DrawSettingsTab(d);     ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Item, Key("tab_custom_prices")).c_str())) { DrawCustomPricesTab(d); ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Profit, Key("tab_statistics")).c_str()))    { DrawStatisticsTab(d);   ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Map, Key("tab_zones")).c_str()))         { DrawZonesTab(d);        ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Session, Key("tab_hiveblood")).c_str()))     { DrawHivebloodTab(d);    ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Sword, Key("tab_atziri")).c_str()))        { DrawBeaconsTab(d);      ImGui::EndTabItem(); }
+    if (ImGui::BeginTabItem(TabLabel(FcGlyph::Kills, Key("tab_kills")).c_str()))         { DrawKillsTab(d);        ImGui::EndTabItem(); }
     ImGui::EndTabBar();
 }

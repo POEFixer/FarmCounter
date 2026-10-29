@@ -5,6 +5,7 @@
 // Pricing flows through the host price service (ctx()->Prices via PriceProvider),
 // so the plugin makes zero HTTP calls and owns no price database.
 #include "../../POEFixer/plugin_sdk/PluginSDK.h"
+#include "src/lang_en.generated.h"   // the embedded English: once per DLL, after PluginSDK.h
 #include <imgui.h>
 
 #include "src/FarmTypes.h"
@@ -105,7 +106,7 @@ public:
         m_prices.SetContext(ctx());
         m_icons.SetDevice(static_cast<ID3D11Device*>(ctx()->D3DDevice));
         m_icons.LoadCurrencyIcons();
-        m_icons.LoadRadarAtlas();   // radar monster icons for the kill counter
+        PumpIcons();                // radar monster icons for the kill counter
         m_tracker.Init(ctx(), &m_prices, &m_zones, m_dir);  // Init BEFORE OnEnable
         m_tracker.OnEnable();                               // OnEnable loads the map history
         ctx()->Log.Info((std::string("FarmCounter ") + PluginSDK_GetInfo()->version + " enabled").c_str());
@@ -120,6 +121,7 @@ public:
     void DrawUI() override {
         if (ctx()->ImGuiContext)
             ImGui::SetCurrentContext(static_cast<ImGuiContext*>(ctx()->ImGuiContext));
+        PumpIcons();   // the host may install (new) radar icons at any time: follow its revision
 
         // Only kills consume world entities. Loot comes from the backpack, so
         // avoid copying every ground item's strings each frame near loot piles.
@@ -202,6 +204,12 @@ public:
     void SaveSettings() override { ::SaveSettings(m_dir, m_settings); }
 
 private:
+    // The radar icon atlas follows the host's game data (desktop 371+; revision 0 on an older
+    // host, which keeps the one load plus the retry while the file is absent).
+    void PumpIcons() {
+        m_icons.PumpRadarAtlas(ctx()->Lang.GameDataRevision(PSDK_GAMEDATA_GROUP_RADAR_ICONS), ::GetTickCount64());
+    }
+
     std::filesystem::path m_dir;
     OverlaySettings       m_settings;
     PriceProvider         m_prices;
@@ -231,6 +239,6 @@ extern "C" PLUGIN_API void DestroyPlugin(PluginSDK::Plugin* p) {
 POEFIXER_PLUGIN_INFO(
     "FarmCounter",
     "Farm Counter",
-    "1.0.2",
+    "1.0.3",
     "POEFixer",
     "Records your map runs: loot value, map time, kills, gold and XP per hour, with run history and statistics per map type.")

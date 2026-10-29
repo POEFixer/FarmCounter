@@ -3,8 +3,11 @@
 // icons (core iconPath) and the radar sprite-sheet monster icons.
 #include <imgui.h>
 #include <d3d11.h>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
+#include "AtlasReload.h"
 
 struct IconTex { ImTextureID srv = 0; int w = 0, h = 0; bool valid = false; };
 
@@ -17,7 +20,12 @@ public:
     ~IconTextures() { Release(); }
     void SetDevice(ID3D11Device* dev) { m_device = dev; }
     void LoadCurrencyIcons();                       // ex/div/chaos from Resources/currency/poe2 ("<Name> Orb.png", else the old "<code>.png")
-    void LoadRadarAtlas();                          // monster rarity icons from Resources/radar
+    // Monster rarity icons from Resources/radar/icons.png, called once per frame (and at enable)
+    // with the host's game-data revision of the radar icons and a millisecond clock: loads the
+    // atlas the first time, again when the revision moves (the host installed new icons), and
+    // every few seconds while the current revision's file is absent (a first run before the
+    // download). A replaced texture is released a few frames later.
+    void PumpRadarAtlas(uint64_t revision, uint64_t nowMs);
     const IconTex& Currency(int overlayCurrencyIdx) const;  // 0=ex,1=div,2=chaos
     // Radar monster icon by rarity (0=Normal 1=Magic 2=Rare 3=Unique); .valid
     // false when the atlas is missing — callers fall back to colored dots.
@@ -30,8 +38,13 @@ public:
 private:
     static IconTex LoadPngFile(ID3D11Device*, const std::wstring& widePath);
     static IconTex LoadPngBytes(ID3D11Device*, const unsigned char* bytes, int len);
+    bool LoadRadarAtlas();                          // true when a new atlas replaced the held one
+
+    struct Retired { ImTextureID srv = 0; int frames = 0; };
 
     ID3D11Device* m_device = nullptr;
+    FcAtlas::ReloadPolicy m_atlasPolicy;
+    std::vector<Retired> m_retired;     // replaced atlas views, released after kRetireFrames pumps
     IconTex m_ex, m_div, m_chaos;       // currency
     IconTex m_atlas;                    // radar sprite sheet (owns the SRV)
     AtlasIcon m_monster[4];             // per-rarity sub-rects of m_atlas

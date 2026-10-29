@@ -28,6 +28,7 @@
 #include "Overlay.h"
 #include "Theme.h"
 #include "Formatting.h"
+#include "Text.h"
 #include "../LootRows.h"
 #include "../ZoneClassify.h"
 #include "../../../../POEFixer/plugin_sdk/PluginInfoWindow.h"
@@ -43,6 +44,9 @@
 #include <vector>
 
 namespace {
+
+using FcText::I18n::Tr;
+using FcText::I18n::TrF;
 
 // Mirrors ResourceReaders.cpp's kHivebloodCap (not exported in a shared header).
 constexpr int32_t kHivebloodCap = 100000;
@@ -85,23 +89,28 @@ float ExperienceRateColumnWidth() {
     float unit = 0.f;
     for (const char* text : {"K", "M", "B", "T"})
         unit = (std::max)(unit, ImGui::CalcTextSize(text).x);
-    return std::ceil(digits + unit + ImGui::CalcTextSize("-. XP/h").x) + 1.f;
+    const std::string rateText = FcText::I18n::TrF("overlay_xp_rate", { { "rate", "-." } });   // "-. XP/h"
+    return std::ceil(digits + unit + ImGui::CalcTextSize(rateText.c_str()).x) + 1.f;
 }
 
 void DrawExperienceLine(const XpTracker& xp, const MapXpTracker& mapXp) {
-    ImGui::TextColored(FcTheme::kGold, "L%s", xp.HasSample() ? std::to_string(xp.Level()).c_str() : "--");
+    namespace I18n = FcText::I18n;
+    ImGui::TextColored(FcTheme::kGold, "%s", I18n::TrF("overlay_level",
+        { { "level", xp.HasSample() ? std::to_string(xp.Level()) : std::string("--") } }).c_str());
     ImGui::SameLine(0.f, 8.f);
     const ImVec2 ratePosition = ImGui::GetCursorScreenPos();
-    ImGui::TextColored(xp.XpPerHour() < 0.0 ? FcTheme::kLoss : FcTheme::kXp, "%s XP/h",
-                       xp.HasSample() ? FcFormat::Count(xp.XpPerHour()).c_str() : "--");
+    ImGui::TextColored(xp.XpPerHour() < 0.0 ? FcTheme::kLoss : FcTheme::kXp, "%s", I18n::TrF("overlay_xp_rate",
+        { { "rate", xp.HasSample() ? FcFormat::Count(xp.XpPerHour()) : std::string("--") } }).c_str());
     ImGui::SameLine(0.f, 8.f);
     ImGui::SetCursorScreenPos(ImVec2(ratePosition.x + ExperienceRateColumnWidth() + 8.f, ratePosition.y));
-    ImGui::TextColored(mapXp.GainedXp() < 0 ? FcTheme::kLoss : FcTheme::kDim, "Map %s XP",
-                       mapXp.HasSample() ? FcFormat::Count(static_cast<double>(mapXp.GainedXp()), true).c_str() : "--");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Current-map net XP includes death losses.\nRate measurement: %s XP in %s%s",
-                          FcFormat::Count(static_cast<double>(xp.GainedXp()), true).c_str(),
-                          FcFormat::Duration(xp.ActiveSeconds()).c_str(), xp.IsRunning() ? "" : " (paused)");
+    ImGui::TextColored(mapXp.GainedXp() < 0 ? FcTheme::kLoss : FcTheme::kDim, "%s", I18n::TrF("overlay_map_xp",
+        { { "xp", mapXp.HasSample() ? FcFormat::Count(static_cast<double>(mapXp.GainedXp()), true) : std::string("--") } }).c_str());
+    if (ImGui::IsItemHovered()) {
+        std::string tip = std::string(I18n::Tr("overlay_xp_tip_net")) + "\n" + I18n::TrF("overlay_xp_tip_rate",
+            { { "xp", FcFormat::Count(static_cast<double>(xp.GainedXp()), true) }, { "time", FcFormat::Duration(xp.ActiveSeconds()) } });
+        if (!xp.IsRunning()) tip += std::string(" ") + I18n::Tr("settings_xp_paused");
+        ImGui::SetTooltip("%s", tip.c_str());
+    }
 }
 
 // Small colored square ("rarity dot") drawn inline at the cursor, advancing past
@@ -325,7 +334,7 @@ void RenderOverlay(const OverlayDeps& d) {
         std::string zoneDisp =
             inSub ? (disp(tr.MapZoneName()) + " - " + disp(tr.CurrentZone()))
                   : (tr.MapZoneName().empty() ? disp(tr.CurrentZone()) : disp(tr.MapZoneName()));
-        if (zoneDisp.empty()) zoneDisp = "Unknown Zone";
+        if (zoneDisp.empty()) zoneDisp = Tr("overlay_unknown_zone");
 
         const int mapSec = tr.CurrentMapSec();   // pause-honest (Esc menu excluded)
 
@@ -351,7 +360,7 @@ void RenderOverlay(const OverlayDeps& d) {
             ImGui::TextColored(FcTheme::kDim, "(%s)", FcFormat::Duration(mapSec, true).c_str());
             if (!baseReady) {
                 ImGui::SameLine(0.f, 8.f);
-                ImGui::TextColored(FcTheme::kAccent, "scanning...");
+                ImGui::TextColored(FcTheme::kAccent, "%s", Tr("overlay_scanning"));
             } else {
                 ImGui::SameLine(0.f, 8.f);
                 bool gain = totalChaos >= 0.f;
@@ -399,7 +408,7 @@ void RenderOverlay(const OverlayDeps& d) {
             const IconTex& ci = d.icons->Currency(curIdx);
             float iw = IconWidthForLine(ci, lineH);
             if (iw > 0.f) { ImGui::SameLine(0.f, 2.f); ImGui::Image(ci.srv, ImVec2(iw, lineH)); }
-            ImGui::SameLine(0.f, 2.f); ImGui::TextColored(pc, "/h");
+            ImGui::SameLine(0.f, 2.f); ImGui::TextColored(pc, "%s", Tr("overlay_per_hour"));
         }
 
         ImGui::SameLine(0.f, 8.f); ImGui::TextDisabled("|"); ImGui::SameLine(0.f, 8.f);
@@ -415,7 +424,7 @@ void RenderOverlay(const OverlayDeps& d) {
             ImGui::EndGroup();
             if (ImGui::IsItemHovered()) {
                 const auto& name = d.zones ? d.zones->CategoryDisplay(*d.currentMapCategory) : *d.currentMapCategory;
-                ImGui::SetTooltip("%s: recorded runs across all saved sessions, including this run.", name.c_str());
+                ImGui::SetTooltip("%s", TrF("overlay_visits_tip", { { "map", name } }).c_str());
             }
         }
 
@@ -429,7 +438,7 @@ void RenderOverlay(const OverlayDeps& d) {
     }
 
     if (!tr.SessionRunning())
-        ImGui::TextColored(FcTheme::kLoss, "Paused — resumes on next map");
+        ImGui::TextColored(FcTheme::kLoss, "%s", Tr("overlay_paused"));
 
     if (s.showXpPerHour) {
         ImGui::Spacing();
@@ -534,7 +543,7 @@ void RenderOverlay(const OverlayDeps& d) {
         ImGui::Separator();
 
         if (visible.rows.empty()) {
-            ImGui::TextDisabled("No changes yet");
+            ImGui::TextDisabled("%s", Tr("overlay_no_changes"));
         } else {
             ImGuiTableFlags tfl = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoBordersInBody;
             if (ImGui::BeginTable("##loot", 2, tfl)) {
@@ -571,7 +580,8 @@ void RenderOverlay(const OverlayDeps& d) {
 
                 ImGui::EndTable();
             }
-            if (visible.hidden > 0) ImGui::TextDisabled("+%zu more items", visible.hidden);
+            if (visible.hidden > 0)
+                ImGui::TextDisabled("%s", TrF("overlay_more_items", { { "count", std::to_string(visible.hidden) } }).c_str());
         }
     }
 }

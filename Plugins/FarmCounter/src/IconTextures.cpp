@@ -73,13 +73,30 @@ const IconTex& IconTextures::Currency(int idx) const {
     return m_ex;  // 0 or out-of-range
 }
 
-void IconTextures::LoadRadarAtlas() {
-    if (!m_device || m_atlas.valid) return;
+void IconTextures::PumpRadarAtlas(uint64_t revision, uint64_t nowMs) {
+    for (auto it = m_retired.begin(); it != m_retired.end();) {
+        if (--it->frames > 0) { ++it; continue; }
+        if (it->srv) reinterpret_cast<ID3D11ShaderResourceView*>(it->srv)->Release();
+        it = m_retired.erase(it);
+    }
+    if (!m_device || !m_atlasPolicy.Due(revision, nowMs)) return;
+    m_atlasPolicy.Record(revision, nowMs, LoadRadarAtlas());
+}
+
+bool IconTextures::LoadRadarAtlas() {
+    if (!m_device) return false;
     wchar_t exe[MAX_PATH] = {};
-    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
+    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return false;
     fs::path base = fs::path(exe).parent_path() / L"Resources" / L"radar";
-    m_atlas = LoadPngFile(m_device, (base / L"icons.png").wstring());
-    if (!m_atlas.valid || m_atlas.w <= 0 || m_atlas.h <= 0) return;
+    IconTex fresh = LoadPngFile(m_device, (base / L"icons.png").wstring());
+    if (!fresh.valid || fresh.w <= 0 || fresh.h <= 0) {
+        // Absent or unreadable: keep drawing the atlas already held (the policy retries).
+        if (fresh.srv) reinterpret_cast<ID3D11ShaderResourceView*>(fresh.srv)->Release();
+        return false;
+    }
+    // The replaced view may still be named by a draw list of this frame: retire it.
+    if (m_atlas.srv) m_retired.push_back({ m_atlas.srv, FcAtlas::kRetireFrames });
+    m_atlas = fresh;
 
     // Grid cells of the per-rarity monster icons — the radar's icons.json
     // positions, with the KillCount plugin's hardcoded values as fallback.
@@ -123,6 +140,7 @@ void IconTextures::LoadRadarAtlas() {
     };
     for (int i = 0; i < 4; i++) m_monster[i] = makeIcon(slots[i]);
     m_rogue = makeIcon(slots[4]);
+    return true;
 }
 
 const AtlasIcon& IconTextures::Monster(int rarity) const {
@@ -151,4 +169,8 @@ void IconTextures::Release() {
     m_rogue = AtlasIcon{};
     for (auto& kv : m_items) rel(kv.second);
     m_items.clear();
+    for (auto& r : m_retired)
+        if (r.srv) reinterpret_cast<ID3D11ShaderResourceView*>(r.srv)->Release();
+    m_retired.clear();
+    m_atlasPolicy.Reset();   // the next enable loads the atlas again
 }
