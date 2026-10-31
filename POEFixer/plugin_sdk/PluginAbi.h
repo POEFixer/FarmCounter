@@ -1313,8 +1313,8 @@ typedef struct InfoWindowFrameAbi {
 typedef struct GamepadStatusAbi {
     uint32_t size_bytes;           // sizeof(GamepadStatusAbi) as the plugin was built
     int32_t  status;               // PSDK_GAMEPAD_STATUS_*: the host's controller output
-    int32_t  port;                 // XInput user index (0-3) the game reads while READY or
-                                   //   NOT_IN_FRONT, else -1
+    int32_t  port;                 // XInput user index (0-3) while READY / NOT_IN_FRONT;
+                                   //   -1 for native controllers or unavailable output. Use status for readiness.
     int32_t  controller_ui;        // 1: the game shows its controller UI, 0: its mouse /
                                    //   keyboard UI, -1: unknown (not in game)
     int32_t  requested;            // 1: this plugin holds a gamepad_request_output

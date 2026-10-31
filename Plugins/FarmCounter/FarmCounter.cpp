@@ -239,6 +239,6 @@ extern "C" PLUGIN_API void DestroyPlugin(PluginSDK::Plugin* p) {
 POEFIXER_PLUGIN_INFO(
     "FarmCounter",
     "Farm Counter",
-    "1.0.3",
+    "1.0.4",
     "POEFixer",
     "Records your map runs: loot value, map time, kills, gold and XP per hour, with run history and statistics per map type.")

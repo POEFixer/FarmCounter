@@ -3065,7 +3065,7 @@ enum class GamepadOutputStatus : int32_t {
 
 struct GamepadState {
     GamepadOutputStatus Status = GamepadOutputStatus::Unsupported;
-    int  Port = -1;            // XInput user index (0-3) the game reads while Ready / NotInFront, else -1
+    int  Port = -1;            // XInput index (0-3); -1 for native controllers or unavailable output. Use Ready().
     int  ControllerUi = -1;    // 1 the game shows its controller UI, 0 mouse / keyboard UI, -1 unknown
     bool Requested = false;    // this plugin holds RequestOutput(true)
     bool Ready() const { return Status == GamepadOutputStatus::Ready; }
