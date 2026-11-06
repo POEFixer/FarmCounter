@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.5
+
+- Knows the zones added by game update 0.5.5f: its zone list follows the game's.
+
 ## 1.0.4
 
 - Built with the current plugin SDK: a controller that is not XInput reports no port (-1) even when ready.
